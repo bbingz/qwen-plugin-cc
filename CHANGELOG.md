@@ -2,6 +2,10 @@
 
 Cross-AI collaboration log. Reverse chronological. Flat format.
 
+## 2026-04-21
+
+- **t-checklist-verified + v0.1.0** (Claude Opus 4.7) — 端到端 T-checklist 16 项 15 过 1 skip(T11 用户跳过)。3-way review(Claude-via-qwen + Codex + Gemini)对 a6fdb7f 挖出 5 个 P0 + 1 P1 全部修复(86ce8d1):upsertJob 字段兼容、refreshJobLiveness 不再假成功、hook 兼容 jobId/id、result 主动 finalize、SessionEnd 保留记录、fd 泄漏。重构:refreshJobLiveness 提 `lib/job-lifecycle.mjs` 供 status/result/hook 共用。**v0.1.0 tag 打出**。_status: released_
+
 ## 2026-04-20
 
 - **phase-5-docs-done** (Claude Opus 4.7) — Phase 5 文档部分完成:`lessons.md`(10 条核心发现 + 7 条给下个 agent-plugin-cc 的启动清单)、`README.md` 终版(7 命令齐 + Architecture/Testing/Development 三节)、CHANGELOG 定版检查(无改动)。剩 Task 5.4(T1-T16 UI 手测 + `v0.1.0` tag)交用户。_status: docs done;waiting for UI 手测_

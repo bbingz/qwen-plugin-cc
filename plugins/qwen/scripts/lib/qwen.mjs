@@ -157,3 +157,16 @@ export function parseAuthStatusText(text) {
 
   return result;
 }
+
+// ── Installer detection ──────────────────────────────────────
+
+/**
+ * 探测可用的 qwen 安装途径(spec §1.2)。
+ */
+export function detectInstallers() {
+  return {
+    npm: binaryAvailable("npm", ["--version"]).available,
+    brew: binaryAvailable("brew", ["--version"]).available,
+    shellInstaller: binaryAvailable("sh", ["-c", "command -v curl"]).available,
+  };
+}

@@ -6,7 +6,7 @@ const SCHEMA_TEXT = JSON.stringify({
   type: "object",
   required: ["verdict", "findings"],
   properties: {
-    verdict: { type: "string", enum: ["approve", "changes_requested"] },
+    verdict: { type: "string", enum: ["approve", "needs-attention"] },
     findings: { type: "array" },
   },
 }, null, 2);
@@ -15,7 +15,7 @@ const SCHEMA_OBJ = {
   type: "object",
   required: ["verdict", "findings"],
   properties: {
-    verdict: { type: "string", enum: ["approve", "changes_requested"] },
+    verdict: { type: "string", enum: ["approve", "needs-attention"] },
     findings: { type: "array" },
   },
 };
@@ -70,7 +70,7 @@ test("reviewWithRetry: retry 1 通过(首次 + 1 retry)", async () => {
   const runQwen = async () => {
     call++;
     if (call === 1) return "not json at all";
-    return '{"verdict":"changes_requested","findings":[{"path":"x"}]}';
+    return '{"verdict":"needs-attention","findings":[{"path":"x"}]}';
   };
   const r = await reviewWithRetry({
     diff: "fake",

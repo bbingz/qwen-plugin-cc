@@ -16,6 +16,7 @@ import {
   spawnQwenProcess,
   streamQwenOutput,
   detectFailure,
+  parseStreamEvents,
   CompanionError,
   cancelJobPgid,
   reviewWithRetry,
@@ -26,6 +27,7 @@ import {
   writeJobFile,
   listJobs,
   resolveJobFile,
+  resolveJobLogFile,
   loadState,
   saveState,
 } from "./lib/state.mjs";
@@ -215,15 +217,26 @@ async function runTask(rawArgs) {
     warnings,
   };
 
+  // bg 模式:spawn 前把 stdout/stderr 直接写到 log file(OS fd),
+  // parent exit 不影响 child 写 log。fg 模式走默认 pipe(companion 读 stream)。
+  let logFile = null;
+  let stdio;
+  if (background) {
+    logFile = resolveJobLogFile(cwd, jobId);
+    const logFd = fs.openSync(logFile, "w");
+    stdio = ["ignore", logFd, logFd];
+    jobMeta.logFile = logFile;
+  }
+
   // Spawn
-  const { child } = spawnQwenProcess({ args, env, cwd, background });
+  const { child } = spawnQwenProcess({ args, env, cwd, background, stdio });
   jobMeta.pid = child.pid;
   jobMeta.pgid = child.pid; // detached 后 pid === pgid
 
   upsertJob(cwd, jobMeta);
 
   if (background) {
-    // 后台:立即返 jobId,companion 退
+    // 后台:立即返 jobId,companion 退。child stdio 已由 OS 直接写 log file。
     process.stdout.write(`Job queued: ${jobId}\n`);
     process.stdout.write(`Check with: /qwen:status ${jobId}\n`);
     process.exit(0);
@@ -342,24 +355,50 @@ async function runStatus(rawArgs) {
   const cwd = process.cwd();
   const jobId = positionals[0];
 
-  // pid 探活 + orphan 迁移
+  // pid 探活 + 被动 finalize(bg job)
+  // bg child 把 stream-json 写到 logFile;child 死后读 log 解析出 result/sessionId/failure,
+  // writeJobFile 落完整负载。没 log 才降级为 orphan。
   function refreshJobLiveness(job) {
     if (job.status !== "running" || !job.pid) return job;
     try {
       process.kill(job.pid, 0); // 探测,不发信号
       return job;
     } catch (e) {
-      if (e.code === "ESRCH") {
+      if (e.code !== "ESRCH") return job;
+
+      // bg job 有 log file → 解析
+      if (job.logFile && fs.existsSync(job.logFile)) {
+        let logText = "";
+        try { logText = fs.readFileSync(job.logFile, "utf8"); } catch { /* ignore */ }
+        const parsed = parseStreamEvents(logText);
+        const failure = detectFailure({
+          exitCode: 0, // child 已自然退出(我们没杀),按 stream 结果判
+          resultEvent: parsed.resultEvent,
+          assistantTexts: parsed.assistantTexts,
+        });
         const updated = {
           ...job,
-          status: "failed",
-          failure: { kind: "orphan", message: "process not found at status check" },
+          status: failure.failed ? "failed" : "completed",
           finishedAt: new Date().toISOString(),
+          sessionId: parsed.sessionId,
+          result: parsed.resultEvent?.result || null,
+          permissionDenials: parsed.resultEvent?.permission_denials ?? [],
+          failure: failure.failed ? failure : null,
         };
+        writeJobFile(cwd, job.jobId, updated);
         upsertJob(cwd, updated);
         return updated;
       }
-      return job;
+
+      // 无 log → 真 orphan
+      const updated = {
+        ...job,
+        status: "failed",
+        failure: { kind: "orphan", message: "process not found at status check" },
+        finishedAt: new Date().toISOString(),
+      };
+      upsertJob(cwd, updated);
+      return updated;
     }
   }
 

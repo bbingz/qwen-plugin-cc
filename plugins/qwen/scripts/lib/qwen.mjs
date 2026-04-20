@@ -234,13 +234,6 @@ export function runQwenPing({ env, cwd, bin = QWEN_BIN } = {}) {
   return out;
 }
 
-// ── Placeholder for Phase 2 later tasks ─────────────────────
-// callQwenStreaming 在 Task 2.8 / 2.9 / 3.x 的 spawnQwenProcess + streamQwenOutput 组合里实装。
-// 当前只是让 job-control.mjs import 能 resolve,被调用会抛 not implemented。
-export async function callQwenStreaming() {
-  throw new Error("callQwenStreaming: not implemented yet (see Task 2.8–2.9)");
-}
-
 // ── classifyApiError(§5.1 v3.1) ────────────────────────────
 
 /**

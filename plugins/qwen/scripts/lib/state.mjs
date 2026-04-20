@@ -156,7 +156,7 @@ function pruneJobs(jobs) {
 }
 
 function cleanupOrphanedFiles(workspaceRoot, jobs) {
-  const jobIds = new Set(jobs.map((j) => j.id));
+  const jobIds = new Set(jobs.map((j) => j.jobId ?? j.id));
   const jobsDir = resolveJobsDir(workspaceRoot);
   try {
     for (const file of fs.readdirSync(jobsDir)) {

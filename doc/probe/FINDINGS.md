@@ -16,6 +16,20 @@
 - 真命令:`qwen --version` 或 `qwen -v`
 - **影响**:plan Task 1.4 的 `getQwenAvailability` 实现必须用 `--version` 替代 `-V`
 
+### F-11. gemini state.mjs API 签名与 codex 不同
+
+Task 2.3 实装时发现:
+- `writeJobFile(workspaceRoot, jobId, payload)` — 三参数,不是 `(cwd, obj)`
+- `readJobFile(jobFilePath)` — 单参数接文件路径,要先 `resolveJobFile(cwd, jobId)` 拿路径
+- `listJobs(cwd)` — 从 `state.json::jobs[]` 读,不扫描 `jobs/` 目录
+- `upsertJob(cwd, jobData)` — 写入 state.json 的主路径;`writeJobFile` 只写 jobs/<id>.json 单文件
+- 导出 22 个符号含 `loadState / saveState / updateState / appendTimingHistory / readTimingHistory / getConfig / setConfig` 等
+
+**影响**:plan Phase 2 的 runTask / runStatus / runResult / runCancel 要按 gemini 实际 API 写,不是 plan 里的 codex-风签名。具体:
+- runTask 写 job:先 `upsertJob(cwd, {...jobMeta})` + 可选 `writeJobFile(cwd, jobId, payload)` 存单 job
+- runStatus 列 job:`listJobs(cwd)` 返 `state.json::jobs[]`
+- runResult 读:`readJobFile(resolveJobFile(cwd, jobId))`
+
 ### F-1b. `qwen --version` 输出**裸版本号**,不含 "qwen, version" 前缀
 
 - Phase 1 Task 1.4 实装时发现:`qwen --version` 输出就是 `0.14.5`(单行裸版本)

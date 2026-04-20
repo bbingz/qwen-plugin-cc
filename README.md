@@ -2,13 +2,42 @@
 
 Use Qwen Code CLI from Claude Code to review code, delegate tasks, and debug.
 
-**Status**: v0.1 complete (Phase 0-4 done, 84 tests passing) — see [CHANGELOG.md](./CHANGELOG.md).
+**Status**: v0.1.1 released — 7 slash commands, 97 unit + 3 integ tests, 4-way reviewed (Claude + Codex + Gemini + Qwen). See [CHANGELOG.md](./CHANGELOG.md).
 
-## Install(after v0.1 released)
+## Install
+
+### From GitHub (recommended)
 
 ```bash
-claude plugins add /path/to/qwen-plugin-cc/plugins/qwen
+claude plugins marketplace add https://github.com/bbingz/qwen-plugin-cc
+claude plugins install qwen@qwen-plugin
 ```
+
+Restart Claude Code, then run `/qwen:setup` to verify.
+
+### From local clone (for development)
+
+```bash
+git clone https://github.com/bbingz/qwen-plugin-cc.git
+claude plugins marketplace add /path/to/qwen-plugin-cc
+claude plugins install qwen@qwen-plugin
+```
+
+### Update
+
+```bash
+claude plugins marketplace update qwen-plugin
+claude plugins update qwen@qwen-plugin
+```
+
+### Uninstall
+
+```bash
+claude plugins uninstall qwen@qwen-plugin
+claude plugins marketplace remove qwen-plugin
+```
+
+Job logs live under `$CLAUDE_PLUGIN_DATA/state/<workspace-slug>/jobs/` (Claude Code sets this; fallback `$TMPDIR/qwen-companion/`). Safe to delete manually if stale.
 
 ## Prerequisites
 

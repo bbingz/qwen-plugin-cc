@@ -189,7 +189,11 @@ export function generateJobId(prefix = "gj") {
 export function upsertJob(workspaceRoot, jobPatch) {
   return updateState(workspaceRoot, (state) => {
     const now = new Date().toISOString();
-    const idx = state.jobs.findIndex((j) => j.id === jobPatch.id);
+    // qwen job 用 jobId,gemini 血统用 id。两边都要匹配,防止 undefined === undefined 误覆盖。
+    const patchKey = jobPatch.jobId ?? jobPatch.id;
+    const idx = patchKey == null
+      ? -1
+      : state.jobs.findIndex((j) => (j.jobId ?? j.id) === patchKey);
     if (idx >= 0) {
       state.jobs[idx] = { ...state.jobs[idx], ...jobPatch, updatedAt: now };
     } else {

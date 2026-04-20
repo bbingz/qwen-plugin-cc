@@ -11,11 +11,12 @@ import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { getConfig, listJobs } from "./lib/state.mjs";
 import { sortJobsNewestFirst } from "./lib/job-control.mjs";
 import { SESSION_ID_ENV } from "./lib/job-control.mjs";
-import { ensureGitRepository } from "./lib/git.mjs";
+import { ensureGitRepository, getRepoRoot } from "./lib/git.mjs";
 
 function resolveWorkspaceRoot(cwd) {
   try {
-    return ensureGitRepository(cwd);
+    ensureGitRepository(cwd);
+    return getRepoRoot(cwd) || cwd;
   } catch {
     return cwd;
   }
@@ -154,9 +155,18 @@ function main() {
   const config = getConfig(workspaceRoot);
 
   const jobs = sortJobsNewestFirst(filterJobsForCurrentSession(listJobs(workspaceRoot), input));
-  const runningJob = jobs.find((job) => job.status === "queued" || job.status === "running");
+  // 过滤"活着的" running 记录:state 可能有陈旧 running(bg lazy finalize 未触发),
+  // 这里对每个疑似 running 做 process.kill(pid, 0) 探活,死了就不报。
+  const runningJob = jobs.find((job) => {
+    if (job.status !== "queued" && job.status !== "running") return false;
+    if (!job.pid) return true; // 没 pid 字段当 running 处理
+    try { process.kill(job.pid, 0); return true; }
+    catch { return false; } // ESRCH = 已死,skip
+  });
+  // qwen 用 jobId,gemini 血统用 id
+  const runningJobId = runningJob ? (runningJob.jobId ?? runningJob.id) : null;
   const runningTaskNote = runningJob
-    ? `Qwen task ${runningJob.id} is still running. Check /qwen:status and use /qwen:cancel ${runningJob.id} if you want to stop it before ending the session.`
+    ? `Qwen task ${runningJobId} is still running. Check /qwen:status and use /qwen:cancel ${runningJobId} if you want to stop it before ending the session.`
     : null;
 
   if (!config.stopReviewGate) {

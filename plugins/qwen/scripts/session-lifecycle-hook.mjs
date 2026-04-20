@@ -3,8 +3,9 @@
 import fs from "node:fs";
 import process from "node:process";
 
-import { loadState, resolveStateFile, saveState } from "./lib/state.mjs";
-import { ensureGitRepository } from "./lib/git.mjs";
+import { loadState, resolveStateFile } from "./lib/state.mjs";
+import { ensureGitRepository, getRepoRoot } from "./lib/git.mjs";
+import { refreshJobLiveness } from "./lib/job-lifecycle.mjs";
 
 function terminateProcessTree(pid) {
   if (!Number.isFinite(pid)) {
@@ -26,7 +27,8 @@ const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
 
 function resolveWorkspaceRoot(cwd) {
   try {
-    return ensureGitRepository(cwd);
+    ensureGitRepository(cwd);
+    return getRepoRoot(cwd) || cwd;
   } catch {
     return cwd;
   }
@@ -63,27 +65,22 @@ function cleanupSessionJobs(cwd, sessionId) {
   }
 
   const state = loadState(workspaceRoot);
-  const removedJobs = state.jobs.filter((job) => job.sessionId === sessionId);
-  if (removedJobs.length === 0) {
+  const sessionJobs = state.jobs.filter((job) => job.sessionId === sessionId);
+  if (sessionJobs.length === 0) {
     return;
   }
 
-  for (const job of removedJobs) {
+  // SessionEnd 策略(修正后):
+  // - still-running bg job:先 refreshJobLiveness 读 log 落 jobs/<id>.json,再 kill process
+  // - 已完成的 job:原样保留(让用户下次会话仍可 /qwen:result 查)
+  // - state.json 记录保留(不 filter session jobs);否则 saveState 会触发
+  //   cleanupOrphanedFiles 把刚 finalize 的文件又删了
+  for (const job of sessionJobs) {
     const stillRunning = job.status === "queued" || job.status === "running";
-    if (!stillRunning) {
-      continue;
-    }
-    try {
-      terminateProcessTree(job.pid ?? Number.NaN);
-    } catch {
-      // Ignore teardown failures during session shutdown.
-    }
+    if (!stillRunning) continue;
+    try { refreshJobLiveness(workspaceRoot, job); } catch { /* ignore */ }
+    try { terminateProcessTree(job.pid ?? Number.NaN); } catch { /* ignore */ }
   }
-
-  saveState(workspaceRoot, {
-    ...state,
-    jobs: state.jobs.filter((job) => job.sessionId !== sessionId)
-  });
 }
 
 function handleSessionStart(input) {
@@ -111,6 +108,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`${error instanceof Error ? (error.stack || error.message) : String(error)}\n`);
   process.exit(1);
 });

@@ -36,6 +36,7 @@ import {
   ensureGitRepository,
   collectReviewContext,
 } from "./lib/git.mjs";
+import { refreshJobLiveness } from "./lib/job-lifecycle.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -220,16 +221,21 @@ async function runTask(rawArgs) {
   // bg 模式:spawn 前把 stdout/stderr 直接写到 log file(OS fd),
   // parent exit 不影响 child 写 log。fg 模式走默认 pipe(companion 读 stream)。
   let logFile = null;
+  let logFd = null;
   let stdio;
   if (background) {
     logFile = resolveJobLogFile(cwd, jobId);
-    const logFd = fs.openSync(logFile, "w");
+    logFd = fs.openSync(logFile, "w");
     stdio = ["ignore", logFd, logFd];
     jobMeta.logFile = logFile;
   }
 
   // Spawn
   const { child } = spawnQwenProcess({ args, env, cwd, background, stdio });
+  // spawn 后 child 已 dup 该 fd,parent 立刻关自己的副本防泄漏。
+  if (logFd != null) {
+    try { fs.closeSync(logFd); } catch { /* ignore */ }
+  }
   jobMeta.pid = child.pid;
   jobMeta.pgid = child.pid; // detached 后 pid === pgid
 
@@ -355,53 +361,6 @@ async function runStatus(rawArgs) {
   const cwd = process.cwd();
   const jobId = positionals[0];
 
-  // pid 探活 + 被动 finalize(bg job)
-  // bg child 把 stream-json 写到 logFile;child 死后读 log 解析出 result/sessionId/failure,
-  // writeJobFile 落完整负载。没 log 才降级为 orphan。
-  function refreshJobLiveness(job) {
-    if (job.status !== "running" || !job.pid) return job;
-    try {
-      process.kill(job.pid, 0); // 探测,不发信号
-      return job;
-    } catch (e) {
-      if (e.code !== "ESRCH") return job;
-
-      // bg job 有 log file → 解析
-      if (job.logFile && fs.existsSync(job.logFile)) {
-        let logText = "";
-        try { logText = fs.readFileSync(job.logFile, "utf8"); } catch { /* ignore */ }
-        const parsed = parseStreamEvents(logText);
-        const failure = detectFailure({
-          exitCode: 0, // child 已自然退出(我们没杀),按 stream 结果判
-          resultEvent: parsed.resultEvent,
-          assistantTexts: parsed.assistantTexts,
-        });
-        const updated = {
-          ...job,
-          status: failure.failed ? "failed" : "completed",
-          finishedAt: new Date().toISOString(),
-          sessionId: parsed.sessionId,
-          result: parsed.resultEvent?.result || null,
-          permissionDenials: parsed.resultEvent?.permission_denials ?? [],
-          failure: failure.failed ? failure : null,
-        };
-        writeJobFile(cwd, job.jobId, updated);
-        upsertJob(cwd, updated);
-        return updated;
-      }
-
-      // 无 log → 真 orphan
-      const updated = {
-        ...job,
-        status: "failed",
-        failure: { kind: "orphan", message: "process not found at status check" },
-        finishedAt: new Date().toISOString(),
-      };
-      upsertJob(cwd, updated);
-      return updated;
-    }
-  }
-
   if (jobId) {
     const jobs = listJobs(cwd) || [];
     const job = jobs.find(j => j.jobId === jobId);
@@ -409,13 +368,13 @@ async function runStatus(rawArgs) {
       process.stdout.write(JSON.stringify({ error: "job not found", jobId }, null, 2) + "\n");
       process.exit(3);
     }
-    const refreshed = refreshJobLiveness(job);
+    const refreshed = refreshJobLiveness(cwd, job);
     process.stdout.write(JSON.stringify(refreshed, null, 2) + "\n");
     process.exit(0);
   }
 
   // 列表模式
-  const jobs = (listJobs(cwd) || []).map(refreshJobLiveness);
+  const jobs = (listJobs(cwd) || []).map((j) => refreshJobLiveness(cwd, j));
   if (options.json) {
     process.stdout.write(JSON.stringify(jobs, null, 2) + "\n");
   } else {
@@ -441,7 +400,7 @@ async function runResult(rawArgs) {
   const cwd = process.cwd();
 
   // 优先从 jobs/<id>.json 单文件读(完整 payload 含 result、permissionDenials 等)
-  // fallback 到 state.json jobs 数组(可能只有元数据)
+  // fallback 到 state.json jobs 数组 + 被动 finalize(bg job 未被 status 刷过时)
   let job = null;
   try {
     const jobFilePath = resolveJobFile(cwd, jobId);
@@ -451,7 +410,17 @@ async function runResult(rawArgs) {
   } catch { /* ignore */ }
   if (!job) {
     const jobs = listJobs(cwd) || [];
-    job = jobs.find(j => j.jobId === jobId);
+    const raw = jobs.find(j => (j.jobId ?? j.id) === jobId);
+    if (raw) {
+      // 如果 bg job 还是 running 且 pid 死了,refreshJobLiveness 会读 log + writeJobFile,
+      // 然后我们再从 jobs/<id>.json 重读完整 payload
+      const refreshed = refreshJobLiveness(cwd, raw);
+      const jobFilePath = resolveJobFile(cwd, jobId);
+      if (fs.existsSync(jobFilePath)) {
+        try { job = JSON.parse(fs.readFileSync(jobFilePath, "utf8")); } catch { /* ignore */ }
+      }
+      job = job || refreshed;
+    }
   }
 
   if (!job) {

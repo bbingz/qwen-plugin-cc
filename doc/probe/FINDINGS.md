@@ -16,6 +16,22 @@
 - 真命令:`qwen --version` 或 `qwen -v`
 - **影响**:plan Task 1.4 的 `getQwenAvailability` 实现必须用 `--version` 替代 `-V`
 
+### F-12. `callGeminiStreaming` 签名(job-control 消费接口)
+
+Task 2.4 实装时记录。gemini 版 `callGeminiStreaming` 签名:
+
+```js
+export function callGeminiStreaming({
+  prompt, model, approvalMode = "plan", cwd,
+  timeout = DEFAULT_TIMEOUT_MS, extraArgs = [],
+  resumeSessionId = null, onEvent = () => {}
+})
+```
+
+同步返回,对象含异步 `resultPromise`。`onEvent` 回调供 job-control 流式处理 stream-json 事件。
+
+**影响**:Task 2.8/2.9 实装 `callQwenStreaming` 必须对齐此签名(job-control.mjs 已经按这个契约调用)。当前 `qwen.mjs` 有占位 throw 的 export。
+
 ### F-11. gemini state.mjs API 签名与 codex 不同
 
 Task 2.3 实装时发现:

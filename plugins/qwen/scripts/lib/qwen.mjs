@@ -107,3 +107,19 @@ export function buildSpawnEnv(userSettings) {
 
   return { env, warnings };
 }
+
+// ── Settings ─────────────────────────────────────────────────────
+
+/**
+ * 读 ~/.qwen/settings.json。不存在或坏 JSON 返 null。
+ * @param {string} [filePath] 默认 QWEN_SETTINGS_PATH
+ * @returns {object | null}
+ */
+export function readQwenSettings(filePath = QWEN_SETTINGS_PATH) {
+  try {
+    const text = fs.readFileSync(filePath, "utf8");
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}

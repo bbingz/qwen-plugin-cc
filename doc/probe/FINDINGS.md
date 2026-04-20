@@ -16,6 +16,107 @@
 - 真命令:`qwen --version` 或 `qwen -v`
 - **影响**:plan Task 1.4 的 `getQwenAvailability` 实现必须用 `--version` 替代 `-V`
 
+### F-13. `require_interactive` 只针对显式 yolo(不是所有 bg)
+
+Task 2.11 实装时确认的 UX 语义:
+
+- `background + auto-edit`(默认) → **允许**,qwen auto-deny shell 工具(符合 Phase 0 case 11)
+- `background + 显式 --approval-mode yolo`(未加 --unsafe) → 拒,`require_interactive`
+- `background + --unsafe`(切 yolo) → 允许
+
+实际价值:用户不加 `--unsafe` 也能跑 bg rescue,只是 qwen 不能动 shell;permissionDenials 会非空,`/qwen:result` 高亮提示"加 --unsafe 让 qwen 实际执行"。
+
+比 spec §3.3 原表述("bg 未 unsafe 拒启动")更合理——允许渐进 UX。spec 下次修订统一语义。
+
+**影响**:Task 2.11 实测过 bg + 无 unsafe → 正常起 job(之前误以为是 bug)。
+
+### F-17. Job schema 字段割裂:`id` vs `jobId`(3-way review 2026-04-21 挖出)
+
+- gemini v0.5.2 血统文件(`job-control.mjs`、`state.mjs` 早期版本)用 `j.id` 作 job 主键
+- qwen companion 架构重写后全用 `j.jobId`(UUID,直接传给 qwen `--session-id`,F-7 约束)
+- 割裂副作用:
+  - `state.mjs::cleanupOrphanedFiles` `jobIds.has(j.id)` → qwen job `id` undefined → 所有 qwen log 文件被当 orphan 删(commit a6fdb7f 表层修复)
+  - `state.mjs::upsertJob` `findIndex(j => j.id === jobPatch.id)` → qwen `jobPatch.id` undefined → 第二个 qwen job 匹上第一个 `undefined === undefined` 覆盖第一个(commit 86ce8d1 根因修复)
+  - `stop-review-gate-hook.mjs` 用 `runningJob.id` 生成提示 → 打出 `Qwen task undefined is still running`(commit 86ce8d1 修复)
+- **当前策略**:`upsertJob` / `cleanupOrphanedFiles` key 都用 `j.jobId ?? j.id` 兼容;新代码一律用 `jobId`。历史 gemini 数据保留可读。
+
+### F-16. codex hook 脚本依赖重写(Phase 4 Task 4.5/4.6 实装)
+
+从 codex 拷的 `session-lifecycle-hook.mjs` / `stop-review-gate-hook.mjs` 有 6 类 codex 独有依赖,qwen 版必须替换:
+
+| codex 依赖 | qwen 替换 |
+|---|---|
+| `./lib/app-server.mjs`(BROKER_ENDPOINT_ENV) | **删除**(MCP app-server 特有,qwen 不用) |
+| `./lib/broker-lifecycle.mjs` | **删除**(同上) |
+| `./lib/workspace.mjs::resolveWorkspaceRoot` | 内联最小版(仿 git.mjs::ensureGitRepository) |
+| `./lib/process.mjs::terminateProcessTree` | 内联最小版(qwen process.mjs 没导出此函数) |
+| `./lib/tracked-jobs.mjs::SESSION_ID_ENV` | `./lib/job-control.mjs::SESSION_ID_ENV`(qwen 同名常量在 job-control) |
+| `./lib/qwen.mjs::getQwenAvailability(cwd)` | qwen 版签名是 `(bin)`,改 `getQwenAvailability()` 无参 |
+
+**影响**:Phase 5 打磨时若需重新 merge codex 更新,要复核这些点;长期看需要把 `terminateProcessTree` 加到 `process.mjs` 变正式 API,不留内联版。
+
+### F-15. `git.mjs::collectReviewContext` 签名与返回
+
+Task 3.7 实装时修正:plan/spec 假设 `collectReviewContext({cwd, base, scope})` 单对象参数返 `{diff,...}`,实际 gemini 版是:
+
+```js
+collectReviewContext(cwd, { base, scope = "auto" } = {})
+  // returns: { repoRoot, branch, mode, summary, content }
+```
+
+- **位置参数 cwd + opts 对象**(不是单对象)
+- 返回字段 `content`(含格式化的 status + staged/unstaged diff 拼接),不是裸 `diff`
+- 还返 `mode`(working-tree / branch / staged-only)、`summary`(stat)、`branch`、`repoRoot`
+
+**影响**:Task 3.7 的 runReview 已按实际 API 写(`ctx.content` 喂 runQwen)。spec §4.1 可 v0.2 修订。
+
+真实的 schema enum 实测:`verdict: ["approve", "needs-attention"]`(不是 plan mock 里的 approve/changes_requested)。这个是 codex 原 schema 的固定值,任何使用 review 的测试都应对齐这两个值。
+
+### F-14. `args.mjs` API:`positionals`(复数)+ `valueOptions`
+
+Task 2.11 实装时修正:plan 假设 `parseArgs` 返 `{options, positional}`(单数),实际 gemini args.mjs 签名是 `{options, positionals}`(复数);字符串选项配置键是 `valueOptions` 而非 `stringOptions`。
+
+**影响**:Phase 2 后续 companion 子命令(runCancel/runStatus/runResult)按实际 API 写。
+
+### F-12. `callGeminiStreaming` 签名(job-control 消费接口)
+
+Task 2.4 实装时记录。gemini 版 `callGeminiStreaming` 签名:
+
+```js
+export function callGeminiStreaming({
+  prompt, model, approvalMode = "plan", cwd,
+  timeout = DEFAULT_TIMEOUT_MS, extraArgs = [],
+  resumeSessionId = null, onEvent = () => {}
+})
+```
+
+同步返回,对象含异步 `resultPromise`。`onEvent` 回调供 job-control 流式处理 stream-json 事件。
+
+**影响**:Task 2.8/2.9 实装 `callQwenStreaming` 必须对齐此签名(job-control.mjs 已经按这个契约调用)。当前 `qwen.mjs` 有占位 throw 的 export。
+
+### F-11. gemini state.mjs API 签名与 codex 不同
+
+Task 2.3 实装时发现:
+- `writeJobFile(workspaceRoot, jobId, payload)` — 三参数,不是 `(cwd, obj)`
+- `readJobFile(jobFilePath)` — 单参数接文件路径,要先 `resolveJobFile(cwd, jobId)` 拿路径
+- `listJobs(cwd)` — 从 `state.json::jobs[]` 读,不扫描 `jobs/` 目录
+- `upsertJob(cwd, jobData)` — 写入 state.json 的主路径;`writeJobFile` 只写 jobs/<id>.json 单文件
+- 导出 22 个符号含 `loadState / saveState / updateState / appendTimingHistory / readTimingHistory / getConfig / setConfig` 等
+
+**影响**:plan Phase 2 的 runTask / runStatus / runResult / runCancel 要按 gemini 实际 API 写,不是 plan 里的 codex-风签名。具体:
+- runTask 写 job:先 `upsertJob(cwd, {...jobMeta})` + 可选 `writeJobFile(cwd, jobId, payload)` 存单 job
+- runStatus 列 job:`listJobs(cwd)` 返 `state.json::jobs[]`
+- runResult 读:`readJobFile(resolveJobFile(cwd, jobId))`
+
+### F-1b. `qwen --version` 输出**裸版本号**,不含 "qwen, version" 前缀
+
+- Phase 1 Task 1.4 实装时发现:`qwen --version` 输出就是 `0.14.5`(单行裸版本)
+- 不是 `qwen, version 0.14.5` 这种格式
+- **影响**:
+  - setup JSON `version` 字段值会是 `"0.14.5"`(不含 "qwen, version"),不影响用户体验
+  - Task 1.4 单元测试正则从 `/qwen, version/` 调整为 `/\d+\.\d+\.\d+/`(semver 匹配)
+- **注**:Phase 0 截图里看到的 "qwen, version 0.14.5" 是 qwen 交互 TUI 的 `/status` 命令输出,不是 `qwen --version`
+
 ### F-2. API Error 格式是 `[API Error: NNN ...]` 不是 `(Status: NNN)`
 
 - spec §5.1 `classifyApiError` 状态码优先路径用 `\bStatus:\s*(\d{3})\b`

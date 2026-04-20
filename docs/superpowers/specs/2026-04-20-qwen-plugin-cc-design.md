@@ -249,11 +249,16 @@ Claude Code
                     │     └─► spawn qwen (位置参数) --output-format stream-json --approval-mode yolo
                     │           └─ ChildProcess(detached, new pgid)
                     │
-                    │  (background 分支)
-                    │     ← 边解析 stream-json 边判错;assistant text 命中 /\[API Error:/
-                    │       → 标红 + SIGTERM → 等 child.on('exit') 或 500ms → 写 failure + fsync
-                    │     ← 解析 result → §5.1 五层判终
-                    │     └─► child.unref(); companion 退出;/qwen:status 看后续
+                    │  (background 分支 — 实装修正 2026-04-21)
+                    │     ← spawn 前 fs.openSync(logFile, "w") 拿 fd;stdio:["ignore",logFd,logFd]
+                    │       → child 直接把 stream-json 写 log file(OS 层,parent exit 不影响)
+                    │     ← parent spawn 后 fs.closeSync(logFd)(child 已 dup,防 fd 泄漏)
+                    │     ← parent upsertJob({status:running, pid, logFile}) → exit 0,companion 退
+                    │     ← LAZY FINALIZE:child 自然退出无人等;下次 /qwen:status 或 /qwen:result
+                    │       触发 refreshJobLiveness(ESRCH 探活 → 读 log → parseStreamEvents →
+                    │       detectFailure(有 resultEvent 才走;无则 incomplete_stream failed) →
+                    │       writeJobFile(finalMeta) + upsertJob)
+                    │     ← SessionEnd hook 也触发 refreshJobLiveness,保留 state 记录供下次查
                     │
                     │  (foreground 分支,如果 --wait)
                     │     ← 流式透传 assistant.text 到 companion stdout
@@ -286,17 +291,29 @@ if (appendDirs)   args.push("--include-directories", appendDirs.join(","));
 const { env, warnings } = buildSpawnEnv(userSettings);    // §4.3
 args.push(prompt);                                         // 位置参数
 
+// 2026-04-21 实装修正:bg 不能用 pipe — parent exit 后 pipe 关闭导致 child SIGPIPE / 输出丢失
+// 正确做法:bg 分支 spawn 前开 log fd,child 直接写 OS file;parent 退不受影响
+let logFd = null, stdio;
+if (background) {
+  logFd = fs.openSync(resolveJobLogFile(cwd, jobId), "w");
+  stdio = ["ignore", logFd, logFd];
+}
+
 const child = spawn("qwen", args, {
   env, cwd,
   detached: true,                                          // 独立 pgid
-  stdio: ["ignore", "pipe", "pipe"],
+  stdio: stdio ?? ["ignore", "pipe", "pipe"],              // fg 走默认 pipe,bg 走 log fd
 });
 
+if (logFd != null) fs.closeSync(logFd);                    // parent 立即关自己副本,child 已 dup
+
 writeJob({ jobId, pid: child.pid, pgid: child.pid,
-           approvalMode, unsafeFlag, warnings, ... });
+           approvalMode, unsafeFlag, warnings,
+           logFile: background ? resolveJobLogFile(cwd, jobId) : null, ... });
 
 if (background) {
   child.unref();                                            // 允许 companion 退出
+  // NOTE: 不在这里等 exit / finalize。finalize 是 lazy 的,由后续 status/result/hook 触发
 } else {
   await new Promise((resolve, reject) => {
     child.stdout.pipe(process.stdout);                      // foreground 透传

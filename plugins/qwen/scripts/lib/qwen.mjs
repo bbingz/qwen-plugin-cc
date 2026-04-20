@@ -593,3 +593,66 @@ export function tryLocalRepair(raw) {
 
   return null;
 }
+
+// ── Review prompt 构造(§5.3 v3.1) ──────────────────────────
+
+/**
+ * 初次 review prompt。塞 schema 到 --append-system-prompt,
+ * user prompt 只含 diff 和"output ONLY JSON"指令。
+ */
+export function buildInitialReviewPrompt({ diff, schemaText, adversarial = false }) {
+  const framing = adversarial
+    ? "Challenge this diff's implementation approach and design choices. Find risks, assumptions, and scenarios where this breaks."
+    : "Review this diff for correctness, security, and style issues.";
+
+  const user = `${framing}
+
+<diff>
+${diff}
+</diff>
+
+Output ONLY a JSON object matching the review-output schema. No prose, no code fences.`;
+
+  const appendSystem = `You are a code reviewer. Your output must strictly match this JSON schema:
+
+${schemaText}
+
+Output only the JSON document itself. No prose before or after. No markdown fences.`;
+
+  return { user, appendSystem };
+}
+
+/**
+ * Retry prompt。携带上一轮 raw + schema + ajv 错误 + 修复指令。
+ * 不重贴 diff(retry 复用同一 session -c,qwen 还看得见原 diff)。
+ *
+ * @param {{ previousRaw: string, schemaText: string, ajvErrors: object[], attemptNumber: 1|2 }} opts
+ */
+export function buildReviewRetryPrompt({ previousRaw, schemaText, ajvErrors, attemptNumber }) {
+  // 截断 previousRaw 到 8KB(头 4KB + 尾 2KB + 中段省略标记)
+  let raw = previousRaw || "";
+  if (raw.length > 8000) {
+    raw = raw.slice(0, 4000) + "\n... [truncated middle] ...\n" + raw.slice(-2000);
+  }
+
+  const errSummary = (ajvErrors || []).slice(0, 5).map(e => {
+    return `- ${e.instancePath || "/"}: ${e.message}`;
+  }).join("\n");
+
+  const final = attemptNumber === 2
+    ? "\n\nThis is your final attempt. Output the corrected JSON now."
+    : "";
+
+  return `Your previous output was not valid JSON matching the review-output schema.
+
+Previous raw output:
+${raw}
+
+Schema errors:
+${errSummary}
+
+Schema (authoritative):
+${schemaText}
+
+Fix the JSON to match the schema. Output ONLY the corrected JSON, no prose, no code fences.${final}`;
+}

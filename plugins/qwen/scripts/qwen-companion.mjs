@@ -18,6 +18,7 @@ import {
   detectFailure,
   CompanionError,
   cancelJobPgid,
+  reviewWithRetry,
 } from "./lib/qwen.mjs";
 import {
   ensureStateDir,
@@ -26,6 +27,13 @@ import {
   listJobs,
 } from "./lib/state.mjs";
 import { runCommand } from "./lib/process.mjs";
+import {
+  ensureGitRepository,
+  collectReviewContext,
+} from "./lib/git.mjs";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const USAGE = `Usage: qwen-companion <subcommand> [options]
 
@@ -34,6 +42,8 @@ Subcommands:
   task  [--background|--wait] [--unsafe] [--resume-last] [--session-id <uuid>] <prompt>
   task-resume-candidate [--json]    Check if a resumable task exists in this repo
   cancel <jobId> [--json]           Cancel a running background task
+  review              [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]
+  adversarial-review  [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]
 
 (More subcommands arrive in Phase 2+.)`;
 
@@ -298,6 +308,102 @@ async function runCancel(rawArgs) {
   }
 }
 
+// review / adversarial-review 子命令
+async function runReview(rawArgs, { adversarial = false } = {}) {
+  const { options, positionals } = parseArgs(rawArgs, {
+    booleanOptions: ["wait", "background", "json"],
+    valueOptions: ["base", "scope"],
+  });
+
+  const cwd = process.cwd();
+  ensureGitRepository(cwd);
+
+  // 收集 diff — 注意实际签名: collectReviewContext(cwd, { base, scope })
+  let ctx;
+  try {
+    ctx = collectReviewContext(cwd, {
+      base: options.base,
+      scope: options.scope || "auto",
+    });
+  } catch (e) {
+    process.stdout.write(JSON.stringify({ ok: false, kind: "git_error", message: e.message }, null, 2) + "\n");
+    process.exit(3);
+  }
+
+  // collectReviewContext 返回 { content, summary, mode, ... }，不是 { diff }
+  const diff = ctx.content || "";
+  if (!diff.trim()) {
+    process.stdout.write(JSON.stringify({ ok: false, reason: "no_diff", mode: ctx.mode }, null, 2) + "\n");
+    process.exit(0);
+  }
+
+  // 读 schema
+  const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+  const schemaPath = path.resolve(scriptsDir, "..", "schemas", "review-output.schema.json");
+  const schemaText = fs.readFileSync(schemaPath, "utf8");
+  const schema = JSON.parse(schemaText);
+
+  // 简易验证:required + 基础 enum
+  // (v0.2 可升级为真 ajv;当前避免外部依赖)
+  const validate = (data, s) => {
+    if (typeof data !== "object" || data === null) {
+      return [{ message: "not object", instancePath: "/" }];
+    }
+    const errors = [];
+    for (const req of s.required ?? []) {
+      if (!(req in data)) errors.push({ message: `required: ${req}`, instancePath: `/${req}` });
+    }
+    if (s.properties?.verdict?.enum && data.verdict &&
+        !s.properties.verdict.enum.includes(data.verdict)) {
+      errors.push({ message: `verdict '${data.verdict}' not in enum`, instancePath: "/verdict" });
+    }
+    return errors.length ? errors : null;
+  };
+
+  // 构造 runQwen 闭包
+  const userSettings = readQwenSettings();
+  const { env } = buildSpawnEnv(userSettings);
+  let sessionId = null;
+
+  const runQwen = async (prompt, opts = {}) => {
+    const { args: argsArr } = buildQwenArgs({
+      prompt: prompt.user,
+      appendSystem: prompt.appendSystem || undefined,
+      // review 用 --unsafe(yolo)避免权限弹问(review 是纯读 + 吐 JSON,不会乱写)
+      unsafeFlag: true,
+      background: false,
+      maxSteps: opts.maxSteps ?? 20,
+    });
+
+    const { child } = spawnQwenProcess({ args: argsArr, env, cwd, background: false });
+    const streamResult = await streamQwenOutput({ child, background: false });
+    if (streamResult.sessionId && !sessionId) sessionId = streamResult.sessionId;
+
+    // raw 优先 result.result(完整响应),fallback assistant texts join
+    return streamResult.resultEvent?.result || streamResult.assistantTexts.join("\n");
+  };
+
+  const reviewResult = await reviewWithRetry({
+    diff, schemaText, schema, validate, runQwen, adversarial,
+  });
+
+  if (reviewResult.ok) {
+    process.stdout.write(JSON.stringify(reviewResult.parsed, null, 2) + "\n");
+    process.exit(0);
+  } else {
+    const payload = {
+      ok: false,
+      kind: reviewResult.kind,
+      attempts_summary: reviewResult.attempts.map((a, i) => ({
+        attempt: i + 1,
+        raw_head: (a || "").slice(0, 4000),
+      })),
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    process.exit(6);
+  }
+}
+
 // Dispatcher
 const UNPACK_SAFE_SUBCOMMANDS = new Set(["setup"]);
 
@@ -326,6 +432,10 @@ async function main() {
       return runTaskResumeCandidate(rest);
     case "cancel":
       return await runCancel(rest);
+    case "review":
+      return await runReview(rest, { adversarial: false });
+    case "adversarial-review":
+      return await runReview(rest, { adversarial: true });
     case undefined:
     case "--help":
     case "-h":

@@ -317,3 +317,49 @@ export function detectFailure({ exitCode, resultEvent, assistantTexts }) {
 
   return { failed: false };
 }
+
+// ── Stream JSON 事件解析(离线版,一次性消化字符串) ────────
+
+/**
+ * 从 stream-json JSONL 提取 init / assistant / result 事件。
+ * 离线版(一次性喂全文);streaming 版见 Task 2.9 streamQwenOutput。
+ *
+ * v3.1 F-6: 跳过 type==="thinking" 的 content 块。
+ *
+ * @param {string} text - 完整 stdout JSONL
+ * @returns {{ sessionId, model, mcpServers, assistantTexts, resultEvent }}
+ */
+export function parseStreamEvents(text) {
+  const out = {
+    sessionId: null,
+    model: null,
+    mcpServers: [],
+    assistantTexts: [],
+    resultEvent: null,
+  };
+
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("{")) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+
+    if (event.type === "system" && event.subtype === "init") {
+      out.sessionId = event.session_id ?? out.sessionId;
+      out.model = event.model ?? out.model;
+      if (Array.isArray(event.mcp_servers)) out.mcpServers = event.mcp_servers;
+    } else if (event.type === "assistant") {
+      const blocks = event.message?.content ?? [];
+      for (const b of blocks) {
+        // F-6: 只收 text,跳过 thinking 块
+        if (b?.type === "text" && typeof b.text === "string") {
+          out.assistantTexts.push(b.text);
+        }
+      }
+    } else if (event.type === "result") {
+      out.resultEvent = event;
+    }
+  }
+
+  return out;
+}

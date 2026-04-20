@@ -534,3 +534,62 @@ export async function cancelJobPgid(pgid, { sleepMs = 2000, killFn = process.kil
   }
   return { ok: true };
 }
+
+// ── tryLocalRepair:本地 JSON 修复(§5.3) ──────────────────
+
+/**
+ * 尝试把 qwen 吐的半坏 JSON 修成合法 JSON。
+ * 常见病(Phase 0 case 07 观察 + 经验):
+ * - 纯 JSON(最常见) → 直接 parse
+ * - ```json / ``` fence 包裹
+ * - 前/后置 prose("Here is my review:" 等)
+ * - 尾部大括号缺失(尾部截断)
+ * - 尾逗号(严格 JSON 不允许)
+ *
+ * 修不动返 null,不 throw。
+ */
+export function tryLocalRepair(raw) {
+  if (!raw || typeof raw !== "string") return null;
+
+  // Step 1: 原样 parse
+  try { return JSON.parse(raw); } catch {}
+
+  let text = raw.trim();
+
+  // Step 2: 去 ```json / ``` fence
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
+  if (fenceMatch) text = fenceMatch[1].trim();
+
+  // Step 3: 找第一个 { 或 [,最后一个 } 或 ]
+  const firstBrace = Math.min(
+    ...["{", "["].map(c => { const i = text.indexOf(c); return i < 0 ? Infinity : i; })
+  );
+  const lastBrace = Math.max(
+    ...["}", "]"].map(c => text.lastIndexOf(c))
+  );
+  if (firstBrace === Infinity || lastBrace < 0) return null;
+  text = text.slice(firstBrace, lastBrace + 1);
+
+  try { return JSON.parse(text); } catch {}
+
+  // Step 4: 去尾逗号
+  const noTrailing = text.replace(/,(\s*[}\]])/g, "$1");
+  try { return JSON.parse(noTrailing); } catch {}
+
+  // Step 5: 补缺失 } / ](简单 bracket 计数)
+  let fixed = noTrailing;
+  const stack = [];
+  for (const ch of fixed) {
+    if (ch === "{" || ch === "[") stack.push(ch);
+    else if (ch === "}") stack.pop();
+    else if (ch === "]") stack.pop();
+  }
+  while (stack.length) {
+    const open = stack.pop();
+    fixed += open === "{" ? "}" : "]";
+  }
+
+  try { return JSON.parse(fixed); } catch {}
+
+  return null;
+}

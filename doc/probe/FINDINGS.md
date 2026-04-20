@@ -16,6 +16,26 @@
 - 真命令:`qwen --version` 或 `qwen -v`
 - **影响**:plan Task 1.4 的 `getQwenAvailability` 实现必须用 `--version` 替代 `-V`
 
+### F-13. `require_interactive` 只针对显式 yolo(不是所有 bg)
+
+Task 2.11 实装时确认的 UX 语义:
+
+- `background + auto-edit`(默认) → **允许**,qwen auto-deny shell 工具(符合 Phase 0 case 11)
+- `background + 显式 --approval-mode yolo`(未加 --unsafe) → 拒,`require_interactive`
+- `background + --unsafe`(切 yolo) → 允许
+
+实际价值:用户不加 `--unsafe` 也能跑 bg rescue,只是 qwen 不能动 shell;permissionDenials 会非空,`/qwen:result` 高亮提示"加 --unsafe 让 qwen 实际执行"。
+
+比 spec §3.3 原表述("bg 未 unsafe 拒启动")更合理——允许渐进 UX。spec 下次修订统一语义。
+
+**影响**:Task 2.11 实测过 bg + 无 unsafe → 正常起 job(之前误以为是 bug)。
+
+### F-14. `args.mjs` API:`positionals`(复数)+ `valueOptions`
+
+Task 2.11 实装时修正:plan 假设 `parseArgs` 返 `{options, positional}`(单数),实际 gemini args.mjs 签名是 `{options, positionals}`(复数);字符串选项配置键是 `valueOptions` 而非 `stringOptions`。
+
+**影响**:Phase 2 后续 companion 子命令(runCancel/runStatus/runResult)按实际 API 写。
+
 ### F-12. `callGeminiStreaming` 签名(job-control 消费接口)
 
 Task 2.4 实装时记录。gemini 版 `callGeminiStreaming` 签名:

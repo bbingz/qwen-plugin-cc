@@ -30,3 +30,16 @@ export class CompanionError extends Error {
     Object.assign(this, extra);
   }
 }
+
+// ── Availability ─────────────────────────────────────────────
+
+/**
+ * 探测 qwen CLI 可用性。
+ * v3.1 F-1 实测:qwen -V 返回 "Unknown argument: V",必须用 --version。
+ *
+ * @param {string} [bin] 可选覆盖二进制路径(测试用)
+ * @returns {{ available: boolean, detail: string }}
+ */
+export function getQwenAvailability(bin = QWEN_BIN) {
+  return binaryAvailable(bin, ["--version"]);
+}

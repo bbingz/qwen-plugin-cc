@@ -393,6 +393,75 @@ export function spawnQwenProcess({
   return { child };
 }
 
+// ── streamQwenOutput:流式边读边判错(bg 模式,§4.4) ────────
+
+/**
+ * 从 child.stdout 流式读 JSONL。
+ *
+ * Foreground:不即时判错(避免半截错误输出),读完再让 detectFailure 走。
+ * Background:命中 [API Error: 立即 SIGTERM + 等 child exit 或 500ms 后 resolve。
+ *
+ * v3.1 / Claude+Gemini P1: SIGTERM 后等 exit,防 job.json fs.renameSync 未完成变 orphan。
+ *
+ * @param {{ child, background, onAssistantText?, onResultEvent? }} opts
+ * @returns {Promise<{ sessionId, model, mcpServers, assistantTexts, resultEvent, apiErrorEarly }>}
+ */
+export async function streamQwenOutput({ child, background, onAssistantText, onResultEvent } = {}) {
+  const state = {
+    sessionId: null, model: null, mcpServers: [],
+    assistantTexts: [], resultEvent: null,
+    apiErrorEarly: false,
+    buffer: "",
+  };
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; resolve(state); } };
+
+    child.on("error", (e) => { if (!settled) { settled = true; reject(e); } });
+    child.on("exit", () => finish());
+
+    child.stdout.on("data", (chunk) => {
+      state.buffer += chunk.toString("utf8");
+      let idx;
+      while ((idx = state.buffer.indexOf("\n")) >= 0) {
+        const line = state.buffer.slice(0, idx).trim();
+        state.buffer = state.buffer.slice(idx + 1);
+        if (!line.startsWith("{")) continue;
+        let event;
+        try { event = JSON.parse(line); } catch { continue; }
+
+        if (event.type === "system" && event.subtype === "init") {
+          state.sessionId = event.session_id ?? state.sessionId;
+          state.model = event.model ?? state.model;
+          if (Array.isArray(event.mcp_servers)) state.mcpServers = event.mcp_servers;
+        } else if (event.type === "assistant") {
+          const blocks = event.message?.content ?? [];
+          for (const b of blocks) {
+            // F-6: 跳过 thinking 块
+            if (b?.type === "text" && typeof b.text === "string") {
+              state.assistantTexts.push(b.text);
+              if (onAssistantText) onAssistantText(b.text);
+              // bg 命中 [API Error: → 早退
+              if (background && /\[API Error:/.test(b.text)) {
+                state.apiErrorEarly = true;
+                try {
+                  if (child.pid) process.kill(-child.pid, "SIGTERM");
+                } catch { /* ESRCH 等无声吞 */ }
+                // 500ms 兜底 resolve,即便 exit 事件还没到
+                setTimeout(finish, 500);
+              }
+            }
+          }
+        } else if (event.type === "result") {
+          state.resultEvent = event;
+          if (onResultEvent) onResultEvent(event);
+        }
+      }
+    });
+  });
+}
+
 // ── Stream JSON 事件解析(离线版,一次性消化字符串) ────────
 
 /**

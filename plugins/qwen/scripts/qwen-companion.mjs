@@ -22,6 +22,7 @@ import {
   ensureStateDir,
   upsertJob,
   writeJobFile,
+  listJobs,
 } from "./lib/state.mjs";
 import { runCommand } from "./lib/process.mjs";
 
@@ -30,6 +31,7 @@ const USAGE = `Usage: qwen-companion <subcommand> [options]
 Subcommands:
   setup [--json] [--enable-review-gate] [--disable-review-gate]
   task  [--background|--wait] [--unsafe] [--resume-last] [--session-id <uuid>] <prompt>
+  task-resume-candidate [--json]    Check if a resumable task exists in this repo
 
 (More subcommands arrive in Phase 2+.)`;
 
@@ -221,6 +223,31 @@ async function runTask(rawArgs) {
   process.exit(failure.failed ? 3 : 0);
 }
 
+// task-resume-candidate 子命令 — 供 /qwen:rescue 决策"续/新"
+function runTaskResumeCandidate(rawArgs) {
+  const { options } = parseArgs(rawArgs, { booleanOptions: ["json"] });
+  const cwd = process.cwd();
+
+  let available = false;
+  let latestJobId = null;
+  try {
+    const jobs = listJobs(cwd) || [];
+    const task = jobs.find(j => j.kind === "task");
+    if (task) {
+      const ts = task.finishedAt || task.startedAt;
+      const age = Date.now() - new Date(ts).getTime();
+      if (age < 24 * 3600 * 1000 && !Number.isNaN(age)) {
+        available = true;
+        latestJobId = task.jobId;
+      }
+    }
+  } catch { /* 空 state 也算不可用 */ }
+
+  const payload = { available, latestJobId };
+  process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+  process.exit(0);
+}
+
 // Dispatcher
 const UNPACK_SAFE_SUBCOMMANDS = new Set(["setup"]);
 
@@ -245,6 +272,8 @@ async function main() {
       return runSetup(rest);
     case "task":
       return await runTask(rest);
+    case "task-resume-candidate":
+      return runTaskResumeCandidate(rest);
     case undefined:
     case "--help":
     case "-h":

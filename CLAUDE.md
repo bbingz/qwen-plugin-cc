@@ -40,9 +40,15 @@ Claude Code plugin wrapping Qwen Code CLI(独立 git 仓库,非 monorepo)。
 - args.mjs 返 `{options, positionals}`(复数);配置键 `valueOptions`(F-14)
 - bg + auto-edit(无 unsafe)**允许跑**,仅 bg + 显式 yolo + !unsafe 才 `require_interactive`(F-13)
 
-## Pending
+## Pending(仅剩 UI 手测 + tag;代码 + 文档 100% 完成)
 
-- **UI 手测**(用户做,我代不了):
-  - Phase 1:T1 `claude plugins add ./plugins/qwen` / T2 `/qwen:setup`
-  - Phase 2:T4 `/qwen:rescue --wait` / T5 `/qwen:rescue --background --unsafe` + `/qwen:status` / T5' 拒 require_interactive / T8 cancel / T11 撤 token 后 `not_authenticated` / T13 `--resume <伪 UUID>` 的 `no_prior_session`
-- Phase 3 Review 系:9 tasks(schema + prompts + `reviewWithRetry` 3 轮 + `tryLocalRepair` + /qwen:review + /qwen:adversarial-review)
+**UI 手测 T1-T16(用户在 Claude Code UI 里做,我代不了)**:
+
+- Phase 1:T1 `claude plugins add ./plugins/qwen` / T2 `/qwen:setup` / T12 清 proxy env
+- Phase 2:T4 `/qwen:rescue --wait` / T5 `/qwen:rescue --background --unsafe` / T5' 拒 `require_interactive` / T8 cancel / T11 撤 token / T13 bad resume
+- Phase 3:T9 `/qwen:review` / T10 `/qwen:adversarial-review` / T14 大 diff
+- Phase 4:T3 `--enable-review-gate` / T6 `/qwen:status --wait` / T7 `/qwen:result` / T15 并发 / T16 bash 转义
+
+**全绿后**:`git tag -a v0.1.0 -m "..."` + 按需 merge `phase-1-setup` → main。
+
+见 `~/.claude/projects/-Users-bing--Code--qwen-plugin-cc/memory/pending-after-compact.md`。

@@ -8,7 +8,9 @@
 
 **Tech Stack:** Node.js(内置 `node:test`,无外部依赖)、Bash 脚本、Claude Code plugin manifest(`.claude-plugin/*`)、Qwen Code CLI v0.14.5+。
 
-**Spec 参考**:`docs/superpowers/specs/2026-04-20-qwen-plugin-cc-design.md` v3 — 本 plan 的所有小节号引用都指向 spec。
+**Spec 参考**:`docs/superpowers/specs/2026-04-20-qwen-plugin-cc-design.md` v3.1 — 本 plan 的所有小节号引用都指向 spec。
+
+**Phase 0 FINDINGS 必读**:实施任何 task 前先读 `doc/probe/FINDINGS.md` 的 10 条真实行为发现。plan 已按这些发现更新,但若实施时发现新偏差,**以实际 qwen 行为为准**,回填 FINDINGS 并在本 plan 对应 task 加 [adjustment] 备注。
 
 ---
 
@@ -1081,7 +1083,8 @@ Expected: FAIL with `getQwenAvailability is not a function` 或类似。
  * @returns {{ available: boolean, detail: string }}
  */
 export function getQwenAvailability(bin = QWEN_BIN) {
-  return binaryAvailable(bin, ["-V"]);
+  // v3.1 F-1: qwen -V → "Unknown argument: V";必须 --version
+  return binaryAvailable(bin, ["--version"]);
 }
 ```
 
@@ -1581,6 +1584,7 @@ export function runQwenPing({ env, cwd, bin = QWEN_BIN } = {}) {
     } else if (event.type === "assistant") {
       const blocks = event.message?.content ?? [];
       for (const b of blocks) {
+        // v3.1 F-6: 跳过 thinking 块,只收 text 块
         if (b?.type === "text" && typeof b.text === "string") {
           out.assistantTexts.push(b.text);
         }
@@ -2250,31 +2254,39 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifyApiError } from "../lib/qwen.mjs";
 
-test("classifyApiError: Status: 401 → not_authenticated", () => {
-  const r = classifyApiError("[API Error: Connection refused (Status: 401)]");
+// v3.1 F-2 实测:qwen 真实格式是 [API Error: NNN ...],无 "Status:" 字样
+test("classifyApiError: qwen 实际 401 格式(F-2 实测)", () => {
+  const r = classifyApiError("[API Error: 401 invalid access token or token expired]");
   assert.equal(r.kind, "not_authenticated");
   assert.equal(r.status, 401);
 });
 
-test("classifyApiError: Status: 403 → not_authenticated", () => {
-  const r = classifyApiError("[API Error: (Status: 403)]");
+test("classifyApiError: [API Error: 403 ...] → not_authenticated", () => {
+  const r = classifyApiError("[API Error: 403 forbidden]");
   assert.equal(r.kind, "not_authenticated");
 });
 
-test("classifyApiError: Status: 429 → rate_limited", () => {
-  const r = classifyApiError("[API Error: Status: 429]");
+test("classifyApiError: [API Error: 429 ...] → rate_limited", () => {
+  const r = classifyApiError("[API Error: 429 too many requests]");
   assert.equal(r.kind, "rate_limited");
 });
 
-test("classifyApiError: Status: 400 → invalid_request", () => {
-  const r = classifyApiError("[API Error: Bad Request (Status: 400)]");
+test("classifyApiError: [API Error: 400 ...] → invalid_request", () => {
+  const r = classifyApiError("[API Error: 400 bad request]");
   assert.equal(r.kind, "invalid_request");
 });
 
-test("classifyApiError: Status: 503 → server_error", () => {
-  const r = classifyApiError("[API Error: Service Unavailable (Status: 503)]");
+test("classifyApiError: [API Error: 503 ...] → server_error", () => {
+  const r = classifyApiError("[API Error: 503 service unavailable]");
   assert.equal(r.kind, "server_error");
   assert.equal(r.status, 503);
+});
+
+// (Status: NNN) 作为 fallback(兼容其他 provider)
+test("classifyApiError: fallback (Status: 401) 格式", () => {
+  const r = classifyApiError("[API Error: Connection refused (Status: 401)]");
+  assert.equal(r.kind, "not_authenticated");
+  assert.equal(r.status, 401);
 });
 
 test("classifyApiError: DashScope 108 → insufficient_balance", () => {
@@ -2335,8 +2347,10 @@ Run: `node --test plugins/qwen/scripts/tests/qwen-classify.test.mjs`
 export function classifyApiError(msg) {
   const m = String(msg ?? "");
 
-  // 1. 状态码优先
-  const statusMatch = m.match(/\bStatus:\s*(\d{3})\b/i);
+  // 1. 状态码优先(v3.1 F-2):qwen 格式 [API Error: NNN ...] 优先;
+  //    (Status: NNN) 作兼容其他 provider 的 fallback
+  let statusMatch = m.match(/\[API Error:\s*(\d{3})\b/i);
+  if (!statusMatch) statusMatch = m.match(/\bStatus:\s*(\d{3})\b/i);
   if (statusMatch) {
     const code = parseInt(statusMatch[1], 10);
     if (code === 401 || code === 403) return { failed: true, kind: "not_authenticated", status: code, message: m };
@@ -2623,6 +2637,7 @@ export function parseStreamEvents(text) {
     } else if (event.type === "assistant") {
       const blocks = event.message?.content ?? [];
       for (const b of blocks) {
+        // v3.1 F-6: 跳过 thinking 块,只收 text 块
         if (b?.type === "text" && typeof b.text === "string") {
           out.assistantTexts.push(b.text);
         }
@@ -2903,6 +2918,7 @@ export async function streamQwenOutput({ child, background, onAssistantText, onR
         } else if (event.type === "assistant") {
           const blocks = event.message?.content ?? [];
           for (const b of blocks) {
+            // v3.1 F-6: 跳过 thinking 块
             if (b?.type === "text" && typeof b.text === "string") {
               state.assistantTexts.push(b.text);
               if (onAssistantText) onAssistantText(b.text);
@@ -3180,7 +3196,9 @@ async function runTask(rawArgs) {
 
   const cwd = process.cwd();
   ensureStateDir(cwd);
-  const jobId = generateJobId();
+  // v3.1 F-7: jobId 必须是合法 UUID,因为我们会直接用作 --session-id
+  //          (qwen 会验证 session-id 格式)
+  const jobId = (await import("node:crypto")).randomUUID();
 
   if (background) {
     const { child } = spawnQwenProcess({ args, env, cwd, background: true });
@@ -3233,6 +3251,8 @@ async function runTask(rawArgs) {
     cwd, prompt, warnings,
     sessionId: streamResult.sessionId,
     result: streamResult.resultEvent?.result,
+    // v3.1 F-4: 透传 permission_denials,供 /qwen:result 高亮提示
+    permissionDenials: streamResult.resultEvent?.permission_denials ?? [],
     failure: failure.failed ? failure : null,
   });
 
@@ -5077,6 +5097,15 @@ async function runResult(rawArgs) {
     process.stdout.write(`Kind: ${job.kind}\n`);
     if (job.sessionId) process.stdout.write(`Session: ${job.sessionId}\n`);
     if (job.result) process.stdout.write(`\n--- Result ---\n${job.result}\n`);
+    // v3.1 F-4: permissionDenials 高亮提示
+    if (job.permissionDenials && job.permissionDenials.length > 0) {
+      process.stdout.write(`\n--- Permission Denials (${job.permissionDenials.length}) ---\n`);
+      process.stdout.write(`Qwen 被 auto-deny 的工具调用:\n`);
+      for (const pd of job.permissionDenials) {
+        process.stdout.write(`  - ${pd.tool_name}: ${JSON.stringify(pd.tool_input).slice(0, 120)}\n`);
+      }
+      process.stdout.write(`\n提示:若想让 qwen 实际执行,加 --unsafe 重跑(rescue 用 yolo 模式)。\n`);
+    }
     if (job.failure) {
       process.stdout.write(`\n--- Failure ---\n`);
       process.stdout.write(JSON.stringify(job.failure, null, 2) + "\n");

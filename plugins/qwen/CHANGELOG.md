@@ -2,6 +2,13 @@
 
 ## 0.1.0 (unreleased)
 
+- **Phase 4 完成**(9 tasks + 3 集成测试;累计 84 tests 全绿)
+  - companion 新增 `status`(含 orphan 探活迁移)+ `result`(含 permissionDenials 高亮渲染)子命令
+  - setup 支持 `--enable-review-gate` / `--disable-review-gate` 持久化到 `state.json::config.stopReviewGate`,setup JSON 输出回显此字段
+  - `commands/{status,result,cancel}.md` 3 个斜杠命令
+  - `hooks/hooks.json` + 2 个 hook 脚本(`session-lifecycle-hook.mjs` + `stop-review-gate-hook.mjs`;从 codex 字节起点 + 6 类依赖重写,见 FINDINGS F-16)
+  - `integration.test.mjs` 3 个端到端 spawn companion 的路径测试
+  - Plugin 现有**7 个斜杠命令齐备**:setup / rescue / review / adversarial-review / status / result / cancel(v0.1 scope 完整)
 - **Phase 3 完成**(9 tasks + 13 新测试 + 5 次 review 抽样 0% schema_violation;累计 76 tests 全绿)
   - `schemas/review-output.schema.json` 字节复制 codex(verdict enum: approve / needs-attention)
   - `prompts/{stop-review-gate, adversarial-review}.md` 从 codex 改字样

@@ -2,11 +2,23 @@
 
 **日期**:2026-04-20
 **作者**:bing + Claude Code(Opus 4.7)
-**状态**:v3,已吸收两轮三方 review(Claude + Codex + Gemini)反馈
+**状态**:v3.1,已吸收两轮三方 review + Phase 0 探针 10 条真实行为发现
 **仓库**:`/Users/bing/-Code-/qwen-plugin-cc/`(独立仓库)
 **姊妹工程**:
 - 模板:`openai-codex/codex` v1.0.4(官方)
 - 对齐样本:`gemini-plugin-cc` v0.5.2(已实装)、`kimi-plugin-cc` v0.1.0(Phase 1 已实装,Phase 2+ 开发中)、`minimax-plugin-cc` v0.1(spec 已定,plan 未执行)
+
+**v3.1 变更摘要(对 v3;来自 Phase 0 探针 — 详见 `doc/probe/FINDINGS.md`)**:
+- **F-1 `--version` 而非 `-V`**:`getQwenAvailability` 探活命令改用 `qwen --version`(实测 `-V` 报 Unknown argument)
+- **F-2 API Error 无 "Status:" 字样**:实际格式 `[API Error: 401 invalid access token or token expired]`;`classifyApiError` 首选正则改为 `\[API Error:\s*(\d{3})\b`,原 `(Status: NNN)` 降为 fallback
+- **F-3 默认模型 `qwen3.5-plus`**(qwen3.6-plus 仅 Pro 订阅);所有 model 字面量示例调整
+- **F-4 `auto-edit` 无 TTY 是 auto-deny**(非 hang):保留 §3.3 默认;新增 `permissionDenials[]` 透传机制
+- **F-5 `settings.proxy` 多不存在**:§4.3 注入从"必需修复"降级为"防御层";核心代码保留
+- **F-6 assistant 有 `thinking` 块**:parseStream 必须跳过,只收 `text`
+- **F-7 session UUID 强制**:jobId 生成用 `crypto.randomUUID()`
+- **F-8 `no_prior_session` 触发器**:stderr `"No saved session found with ID"`(case 08 实测)
+- **F-9 auth 走 API Key env**:`BAILIAN_CODING_PLAN_API_KEY` 从 `settings.json::env.*` 读;setup 识别区分 OAuth / API Key mode
+- **F-10 `-m <bad model>` 静默 fallback**:`invalid_request` kind 不靠这路径触发
 
 **v3 变更摘要(对 v2)**:
 - **§5.3 retry 重写**:retry 必须携带上一轮 raw + schema + 修复指令,不新开 session 丢弃 diff(Codex P0 — retry 方向错,v2 采形式漏精神)
@@ -34,6 +46,8 @@
 这是 agent-plugin-cc 四件套的第四件——gemini / kimi / minimax / qwen。
 
 **底层 CLI 选型**:直接用 `qwen` CLI(Qwen Code,v0.14.5+)的 `qwen [prompt] --output-format stream-json` 非交互模式。不用 DashScope 裸 HTTPS(无 agent 运行时)。
+
+**默认模型**(v3.1,F-3 实测):`qwen3.5-plus`(由 `~/.qwen/settings.json::model.name` 决定)。`qwen3.6-plus` 仅 Pro 订阅可用。companion 不显式 `-m`,让用户通过 settings 控制。
 
 ### 1.2 交付物(v0.1)
 
@@ -199,8 +213,10 @@ plugins/qwen/
 Frontmatter 对齐 codex,关键差异:
 - `setup.md`:安装候选动态;未认证提示 `! qwen auth coding-plan`;报告里列 `qwen hooks list`(§4.5)
 - `review.md` / `adversarial-review.md`:`--wait|--background`、`--base <ref>`、`--scope`;`AskUserQuestion` 一次选执行模式
-- `rescue.md`:走 Agent 工具;`task-resume-candidate` 决策续/新;**示例区预埋自救引导**:"若收到 `require_interactive` 错误,加 `--unsafe` 参数重跑 = background yolo 模式"
-- `status.md` / `result.md` / `cancel.md`:纯 Bash passthrough
+- `rescue.md`:走 Agent 工具;`task-resume-candidate` 决策续/新;**示例区预埋两条自救引导**:
+  - "若收到 `require_interactive` 错误,加 `--unsafe` 参数重跑 = background yolo 模式"
+  - "若 `/qwen:result` 里 `permissionDenials` 数组非空(v3.1,F-4),意味 qwen 想调 shell/write 工具但被 auto-deny;加 `--unsafe` 重跑让 qwen 实际执行"
+- `status.md` / `result.md` / `cancel.md`:纯 Bash passthrough;**`result.md` 渲染 `permissionDenials[]` 时高亮**(若非空)
 
 ### 3.5 Hooks
 
@@ -290,7 +306,9 @@ if (background) {
 }
 ```
 
-### 4.3 Proxy 注入
+### 4.3 Proxy 注入(v3.1 防御层)
+
+**v3.1 修正(F-5 实测)**:多数用户 `~/.qwen/settings.json` 不含 `proxy` 字段,clear env 后 qwen headless 仍跑通;v3 的"headless 漏报 settings.proxy"只在少数场景成立。buildSpawnEnv 保留作**防御层**:若 settings 确有 proxy,注入并做冲突诊断;否则不主动 inject。
 
 ```js
 function buildSpawnEnv(userSettings) {
@@ -356,24 +374,26 @@ function buildSpawnEnv(userSettings) {
 | 事件 | 用途 |
 |---|---|
 | `system.init` | 抓 `session_id` 写 job.json;记录 `model`/`tools`/`mcp_servers` |
-| `assistant` | 透传 / 累积;background 下扫 API Error 子串 |
+| `assistant` | `content[]` 含 `type="text"` 和 `type="thinking"` 两类块(F-6 实测)。**只收 `text` 块,跳过 `thinking`** — 否则 thinking 内容会污染 assistantTexts 导致误判。透传 / 累积;background 下扫 `text` 里的 API Error 子串 |
 | `result` | 进 §5.1 最终判终 |
 
 ### 4.5 Authentication 探活(`setup` 子命令)
 
 ```
 setup
-  ├─ qwen -V                                   → installed?
-  ├─ qwen auth status(parser 碎 → authMethod:"unknown" 继续)
-  ├─ 读 ~/.qwen/settings.json                   → chatRecording, proxy, model
+  ├─ qwen --version                            → installed?  (v3.1: 原 -V 是无效选项)
+  ├─ qwen auth status(parser 碎 → authMethod:"unknown" 继续;识别 OAuth / API Key / Coding Plan)
+  ├─ 读 ~/.qwen/settings.json                   → chatRecording, model, env.BAILIAN_CODING_PLAN_API_KEY 等
   ├─ qwen hooks list                           → qwenHooks[](§9-9)
-  ├─ buildSpawnEnv()(§4.3)                    → env + warnings
+  ├─ buildSpawnEnv()(§4.3,v3.1: 防御层非必需路径) → env + warnings
   ├─ spawn qwen "ping" --output-format stream-json --max-session-turns 1
   │    ├─ §5.1 五层判终
   │    └─ 成功 → authenticated=true, model 从 init 事件拿
   └─ JSON:
      { installed, version,
-       authenticated, authDetail, authMethod,
+       authenticated, authDetail,
+       authMethod,                              // "coding-plan" / "qwen-oauth" / "openai-api-key" / "unknown"
+       authKeyLocation,                         // "settings.env.BAILIAN_CODING_PLAN_API_KEY" / "oauth_creds.json" / null
        model, configured_models,
        chatRecording, proxyInjected, warnings,  // warnings 含 proxy_env_mismatch/proxy_conflict
        qwenHooks,                               // 带 hook 类型 (PreToolUse/PostToolUse/...)
@@ -382,6 +402,15 @@ setup
 ```
 
 **原则**:`qwen auth status` 只证"已配置",不证"token 可用"——必须 ping 判终才算 authenticated。
+
+**本机 auth 识别路径**(Phase 0 F-9 实测):
+- 若 `settings.json::env.BAILIAN_CODING_PLAN_API_KEY` 存在 + `codingPlan` 字段存在 → `authMethod: coding-plan`(API Key 实际落地)
+- 若 `~/.qwen/oauth_creds.json` 存在且非 expired → `authMethod: qwen-oauth`
+- 若 `settings.json::env.OPENAI_API_KEY` 或 CLI `--openai-api-key` → `authMethod: openai-api-key`
+- 优先级:API Key 模式(settings.env.*)优于 OAuth(oauth_creds.json)
+- ping 失败指引也要分情境:
+  - API Key mode + 401 → "Key `BAILIAN_CODING_PLAN_API_KEY` 失效,重新 `! qwen auth coding-plan` 或在 `~/.qwen/settings.json::env` 手动换 key"
+  - OAuth mode + 401 → "OAuth token 失效,重新 `! qwen auth qwen-oauth`"
 
 **阻塞 hook 警告**:若 `qwen hooks list` 含 `PreToolUse` 类型(可能弹交互确认),`/qwen:setup` 输出高亮 Warning,解释:"qwen 侧的阻塞 hook 可能与 rescue yolo 模式冲突,导致 job hang 至 timeout"。
 
@@ -394,8 +423,11 @@ $CLAUDE_PLUGIN_DATA/state/<workspace-slug>-<sha256[:16]>/
       └─ <jobId>.json    # { jobId, kind, status, phase, pid, pgid, sessionId,
                          #   approvalMode, unsafeFlag,
                          #   startedAt, finishedAt, cwd, prompt,
-                         #   logPath, result, failure, warnings }
+                         #   logPath, result, failure, warnings,
+                         #   permissionDenials }   // v3.1: 透传自 resultEvent.permission_denials
 ```
+
+**jobId 必须是 UUID**(F-7 实测:qwen `--session-id` 强校验 UUID 格式):companion 用 `crypto.randomUUID()` 生成 jobId,直接用作 `--session-id`。
 
 **Schema 兼容性声明**:`approvalMode`、`unsafeFlag`、`warnings`、`pgid` 是 qwen 插件新增字段。`state.mjs`/`job-control.mjs`/`status`/`result` 路径**是 schema-open 的**(未知字段透传不报错)。**Phase 2 首日验证**:grep gemini 血统下所有 `JSON.parse(jobFile)` 和 `jobs/` 读路径,确认无严格校验。
 
@@ -433,8 +465,10 @@ function detectFailure({ exitCode, resultEvent, assistantTexts }) {
 }
 
 function classifyApiError(msg) {
-  // 优先:从 "[API Error: ... (Status: NNN)]" 提状态码
-  const statusMatch = msg.match(/\bStatus:\s*(\d{3})\b/i);
+  // v3.1: qwen 实际格式是 [API Error: NNN ...](F-2 实测),无 "Status:" 字样。
+  // 优先匹配 qwen 格式;(Status: NNN) 作 fallback 兼容其他 provider。
+  let statusMatch = msg.match(/\[API Error:\s*(\d{3})\b/i);
+  if (!statusMatch) statusMatch = msg.match(/\bStatus:\s*(\d{3})\b/i);
   if (statusMatch) {
     const code = parseInt(statusMatch[1], 10);
     if (code === 401 || code === 403) return { failed: true, kind: "not_authenticated", status: code, message: msg };
@@ -481,7 +515,8 @@ function classifyApiError(msg) {
 | `api_error_unknown` | `[API Error:` 但未命中子分类 | 原样回显 | 根据 message |
 | `qwen_is_error` | `is_error:true` | qwen stderr tail | 透传 |
 | `empty_output` | 五层 5 | "qwen 静默退出" | `/qwen:rescue --fresh` |
-| `no_prior_session` | `-r <id>` exit 非 0 + stderr 说 session 不存在 | "续跑目标会话不存在" | 改 `--fresh` |
+| `no_prior_session` | `-r <UUID>` exit 非 0 + stderr 匹配 `/No saved session found with ID/i`(F-8 实测) | "续跑目标会话不存在" | 改 `--fresh` |
+| `invalid_session_id` | `-r` 或 `--session-id` 不是合法 UUID(F-7) | "session id 必须是 UUID 格式" | 让 companion 用 `crypto.randomUUID()` 生成 |
 | `chat_recording_disabled` | 请求 `-c/-r` 但 settings 关了 | "chat recording 关闭" | 打开或 `--fresh` |
 | `proxy_env_mismatch` | §4.3 step 1 | "env 内部 HTTP(S)_PROXY 值冲突" | 对齐 env |
 | `proxy_conflict` | §4.3 step 2(settings vs env) | "settings 与 env proxy 不一致" | 对齐或清 env |

@@ -123,3 +123,37 @@ export function readQwenSettings(filePath = QWEN_SETTINGS_PATH) {
     return null;
   }
 }
+
+// ── Auth status parser(解析 `qwen auth status` 输出)──────────
+
+/**
+ * 把 qwen auth status 的人类文本解析为结构化对象。
+ * v3.1 F-9: 要能识别三种 mode — coding-plan / qwen-oauth / openai(API Key)。
+ * 碎了 → authMethod: "unknown",不 throw。
+ */
+export function parseAuthStatusText(text) {
+  const result = { authMethod: "unknown", model: null, configured: false };
+  if (!text || typeof text !== "string") return result;
+
+  // 识别 auth 方法
+  if (/Alibaba Cloud Coding Plan|coding.?plan/i.test(text)) {
+    result.authMethod = "coding-plan";
+  } else if (/Qwen OAuth|qwen-oauth/i.test(text)) {
+    result.authMethod = "qwen-oauth";
+  } else if (/OpenAI.?compatible|openai api.?key/i.test(text)) {
+    result.authMethod = "openai";
+  } else if (/Anthropic/i.test(text)) {
+    result.authMethod = "anthropic";
+  }
+
+  // 抓 model
+  const modelMatch = text.match(/Current Model:\s*([^\s\n]+)/i);
+  if (modelMatch) result.model = modelMatch[1];
+
+  // 是否 configured
+  if (/key configured|OAuth token valid|authenticated/i.test(text)) {
+    result.configured = true;
+  }
+
+  return result;
+}

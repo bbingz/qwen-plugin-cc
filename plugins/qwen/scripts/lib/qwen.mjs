@@ -507,3 +507,30 @@ export function parseStreamEvents(text) {
 
   return out;
 }
+
+// ── Cancel 三级信号(§5.5 v3.1) ──────────────────────────────
+
+/**
+ * 对 pgid 依次发 SIGINT → SIGTERM → SIGKILL。
+ * 每级之间 sleepMs 等待(default 2000)。
+ * ESRCH 吞掉(子进程已退,正常);其他错误返 cancel_failed。
+ *
+ * v3.1 / Codex P1:非 ESRCH 错不悬停 — 返 { ok:false, kind:"cancel_failed" }
+ *
+ * @param {number} pgid — 子进程组 id
+ * @param {{ sleepMs?, killFn? }} opts — killFn 仅测试用 mock
+ * @returns {Promise<{ ok: true } | { ok: false, kind: "cancel_failed", message: string }>}
+ */
+export async function cancelJobPgid(pgid, { sleepMs = 2000, killFn = process.kill } = {}) {
+  const signals = ["SIGINT", "SIGTERM", "SIGKILL"];
+  for (const sig of signals) {
+    try {
+      killFn(-pgid, sig);
+    } catch (e) {
+      if (e.code === "ESRCH") return { ok: true }; // 已死,正常
+      return { ok: false, kind: "cancel_failed", message: `${sig}: ${e.message}` };
+    }
+    await new Promise(r => setTimeout(r, sleepMs));
+  }
+  return { ok: true };
+}

@@ -27,8 +27,11 @@ test("buildQwenArgs: background + unsafe → 可以 yolo", () => {
   assert.equal(approvalMode, "yolo");
 });
 
+const FAKE_UUID_A = "11111111-2222-3333-4444-555555555555";
+const FAKE_UUID_B = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
 test("buildQwenArgs: sessionId + resumeLast 互斥(sessionId 优先)", () => {
-  const { args } = buildQwenArgs({ prompt: "hi", sessionId: "abc", resumeLast: true });
+  const { args } = buildQwenArgs({ prompt: "hi", sessionId: FAKE_UUID_A, resumeLast: true });
   assert.ok(args.includes("--session-id"));
   assert.ok(!args.includes("-c"));
 });
@@ -39,9 +42,24 @@ test("buildQwenArgs: resumeLast 单独", () => {
 });
 
 test("buildQwenArgs: resumeId 单独", () => {
-  const { args } = buildQwenArgs({ prompt: "hi", resumeId: "xyz" });
+  const { args } = buildQwenArgs({ prompt: "hi", resumeId: FAKE_UUID_B });
   const i = args.indexOf("-r");
-  assert.equal(args[i + 1], "xyz");
+  assert.equal(args[i + 1], FAKE_UUID_B);
+});
+
+// v0.1.1 新增:UUID 校验
+test("buildQwenArgs: 非 UUID sessionId → invalid_session_id", () => {
+  assert.throws(
+    () => buildQwenArgs({ prompt: "hi", sessionId: "not-a-uuid" }),
+    (e) => e instanceof CompanionError && e.kind === "invalid_session_id"
+  );
+});
+
+test("buildQwenArgs: 非 UUID resumeId → invalid_session_id", () => {
+  assert.throws(
+    () => buildQwenArgs({ prompt: "hi", resumeId: "abc" }),
+    (e) => e instanceof CompanionError && e.kind === "invalid_session_id"
+  );
 });
 
 test("buildQwenArgs: appendDirs 逗号拼接", () => {

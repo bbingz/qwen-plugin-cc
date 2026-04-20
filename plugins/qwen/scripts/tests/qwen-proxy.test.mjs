@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSpawnEnv } from "../lib/qwen.mjs";
+import { buildSpawnEnv, filterEnvForChild } from "../lib/qwen.mjs";
 
 function withEnv(overrides, fn) {
   const keys = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"];
@@ -74,4 +74,58 @@ test("buildSpawnEnv: userSettings 为 null 或缺 proxy 字段 → 不炸", () =
     // NO_PROXY 仍 merge
     assert.equal(env.NO_PROXY, "localhost,127.0.0.1");
   });
+});
+
+// v0.1.1 hotfix:env 白名单(防 ANTHROPIC_API_KEY 等泄漏给 qwen child)
+test("filterEnvForChild: 黑名单变量被过滤(ANTHROPIC_API_KEY / OPENAI_API_KEY etc.)", () => {
+  const fake = {
+    PATH: "/usr/bin",
+    HOME: "/tmp/home",
+    ANTHROPIC_API_KEY: "sk-ant-123",
+    GEMINI_API_KEY: "g-456",
+    GOOGLE_APPLICATION_CREDENTIALS: "/x.json",
+    AWS_SECRET_ACCESS_KEY: "aws-secret",
+    AZURE_CLIENT_SECRET: "azure",
+    KIMI_API_KEY: "k",
+    MOONSHOT_API_KEY: "m",
+    SOME_RANDOM_SECRET: "hidden",
+  };
+  const out = filterEnvForChild(fake);
+  assert.equal(out.PATH, "/usr/bin");
+  assert.equal(out.HOME, "/tmp/home");
+  assert.equal(out.ANTHROPIC_API_KEY, undefined);
+  assert.equal(out.GEMINI_API_KEY, undefined);
+  assert.equal(out.GOOGLE_APPLICATION_CREDENTIALS, undefined);
+  assert.equal(out.AWS_SECRET_ACCESS_KEY, undefined);
+  assert.equal(out.AZURE_CLIENT_SECRET, undefined);
+  assert.equal(out.KIMI_API_KEY, undefined);
+  assert.equal(out.MOONSHOT_API_KEY, undefined);
+  assert.equal(out.SOME_RANDOM_SECRET, undefined);
+});
+
+test("filterEnvForChild: qwen/alibaba 家族前缀允许", () => {
+  const out = filterEnvForChild({
+    QWEN_FOO: "1",
+    BAILIAN_CODING_PLAN_API_KEY: "bailian",
+    DASHSCOPE_KEY: "d",
+    ALIBABA_XYZ: "a",
+    ALI_BAR: "b",
+  });
+  assert.equal(out.QWEN_FOO, "1");
+  assert.equal(out.BAILIAN_CODING_PLAN_API_KEY, "bailian");
+  assert.equal(out.DASHSCOPE_KEY, "d");
+  assert.equal(out.ALIBABA_XYZ, "a");
+  assert.equal(out.ALI_BAR, "b");
+});
+
+test("filterEnvForChild: 用户自定义 QWEN_PLUGIN_ENV_ALLOW 白名单扩展", () => {
+  const out = filterEnvForChild({
+    QWEN_PLUGIN_ENV_ALLOW: "MY_VAR,OTHER",
+    MY_VAR: "hello",
+    OTHER: "world",
+    STILL_BLOCKED: "nope",
+  });
+  assert.equal(out.MY_VAR, "hello");
+  assert.equal(out.OTHER, "world");
+  assert.equal(out.STILL_BLOCKED, undefined);
 });

@@ -461,7 +461,7 @@ async function runResult(rawArgs) {
 // review / adversarial-review 子命令
 async function runReview(rawArgs, { adversarial = false } = {}) {
   const { options, positionals } = parseArgs(rawArgs, {
-    booleanOptions: ["wait", "background", "json"],
+    booleanOptions: ["wait", "background", "json", "unsafe"],
     valueOptions: ["base", "scope"],
   });
 
@@ -519,8 +519,9 @@ async function runReview(rawArgs, { adversarial = false } = {}) {
     const { args: argsArr } = buildQwenArgs({
       prompt: prompt.user,
       appendSystem: prompt.appendSystem || undefined,
-      // review 用 --unsafe(yolo)避免权限弹问(review 是纯读 + 吐 JSON,不会乱写)
-      unsafeFlag: true,
+      // v0.1.1 hotfix:review 默认 auto-edit(无 TTY 会 auto-deny shell/write,符合"只读 diff 吐 JSON"的语义)
+      // 仅当用户显式 --unsafe 时切 yolo(罕见:需要 qwen 跑 shell 查额外信息时)
+      unsafeFlag: options.unsafe === true,
       background: false,
       maxSteps: opts.maxSteps ?? 20,
     });

@@ -4,6 +4,7 @@ Cross-AI collaboration log. Reverse chronological. Flat format.
 
 ## 2026-04-21
 
+- **v0.1.1 hotfix** (Claude Opus 4.7) — 4-way review(Claude + Codex + Gemini + Qwen)挖出 3 个安全级 P0 + 1 correctness P0,全部修复:(a) `buildSpawnEnv` 改白名单继承,防 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 等 parent 密钥泄漏给 qwen child(Codex P2-1 升 P0);用户可 `QWEN_PLUGIN_ENV_ALLOW` 扩展白名单;(b) `cancelJobPgid` 加 pre-kill pgid 探活 + `ps -g` 验证 pgid 下有 qwen,防 OS pgid 回收后误杀系统无关进程(Codex P0-1);(c) `buildQwenArgs` 加 UUID 格式校验 sessionId/resumeId,plugin 层提前抛 `invalid_session_id` 而非运行时 qwen reject(Qwen P0);(d) `/qwen:review` 默认 `auto-edit`(qwen auto-deny shell/write),加 `--unsafe` 显式开关,review 不再无门禁 yolo(Claude P0-1)。+3 env whitelist tests, +2 UUID tests, +1 pgid_recycled test,累计 97 unit + 3 integ all green。4-way review 归档 `doc/review-v010-{claude,codex,gemini,qwen}.md`。**v0.1.1 tag 打出**。_status: released_
 - **t-checklist-verified + v0.1.0** (Claude Opus 4.7) — 端到端 T-checklist 16 项 15 过 1 skip(T11 用户跳过)。3-way review(Claude-via-qwen + Codex + Gemini)对 a6fdb7f 挖出 5 个 P0 + 1 P1 全部修复(86ce8d1):upsertJob 字段兼容、refreshJobLiveness 不再假成功、hook 兼容 jobId/id、result 主动 finalize、SessionEnd 保留记录、fd 泄漏。重构:refreshJobLiveness 提 `lib/job-lifecycle.mjs` 供 status/result/hook 共用。**v0.1.0 tag 打出**。_status: released_
 
 ## 2026-04-20

@@ -1,6 +1,6 @@
 ---
 description: Run a Qwen code review against local git state
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]'
+argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--unsafe]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
@@ -36,6 +36,12 @@ Core constraint:
 - Do not strip `--wait` or `--background`.
 - `/qwen:review` is native-review only.
 - For custom instructions or adversarial framing, use `/qwen:adversarial-review`.
+
+## Approval mode(v0.1.1 security hotfix)
+
+- **Default**: `auto-edit` — qwen auto-deny shell/write tools during review (纯读 diff + 吐 JSON,不需要执行任务)
+- Add `--unsafe` to switch to `yolo` only when review genuinely needs qwen to inspect files beyond diff(罕见;例如让 qwen 跑 `rg` 查额外调用点)。
+- 默认模式下如果 qwen 想调 shell/write,会进 `permissionDenials` 数组,不影响 review 输出。
 
 ## Foreground flow
 

@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { binaryAvailable, runCommand } from "./process.mjs";
 
 // ── 常量 ──────────────────────────────────────────────────────
@@ -20,6 +20,43 @@ export const QWEN_CREDS_PATH = path.join(os.homedir(), ".qwen", "oauth_creds.jso
 // Proxy env keys — 四键全量(§4.3)
 export const PROXY_KEYS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
 export const NO_PROXY_DEFAULTS = ["localhost", "127.0.0.1"];
+
+// ── Env whitelist(v0.1.1 hotfix:防 parent env 全量泄漏给 qwen child) ──
+// 固定允许的 key
+const ENV_ALLOW_EXACT = new Set([
+  // 基础
+  "PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE",
+  "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "TMPDIR", "TZ", "PWD", "LOGNAME",
+  // Node
+  "NODE_PATH", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
+  // Proxy 四键 + NO_PROXY(buildSpawnEnv 会单独处理,但也允许直接透传)
+  "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy",
+  // Claude Code 插件数据目录(state.mjs 依赖)
+  "CLAUDE_PLUGIN_DATA",
+  // qwen 用于 openai-compat 模式(罕见)
+  "OPENAI_BASE_URL", "OPENAI_API_KEY",
+]);
+// 前缀允许(qwen / Alibaba / DashScope 家族)
+const ENV_ALLOW_PREFIXES = [
+  "QWEN_", "BAILIAN_", "DASHSCOPE_", "ALIBABA_", "ALI_",
+  "NPM_CONFIG_", "NPM_TOKEN", // npm 有时在 qwen extensions 里 resolve 包
+];
+// 用户自定义扩展白名单:QWEN_PLUGIN_ENV_ALLOW="KEY1,KEY2,..."
+const USER_ALLOW_ENV_VAR = "QWEN_PLUGIN_ENV_ALLOW";
+
+export function filterEnvForChild(parentEnv = process.env) {
+  const userAllow = new Set(
+    String(parentEnv[USER_ALLOW_ENV_VAR] ?? "")
+      .split(",").map((s) => s.trim()).filter(Boolean)
+  );
+  const out = {};
+  for (const [k, v] of Object.entries(parentEnv)) {
+    if (v == null) continue;
+    if (ENV_ALLOW_EXACT.has(k) || userAllow.has(k)) { out[k] = v; continue; }
+    if (ENV_ALLOW_PREFIXES.some((p) => k.startsWith(p))) { out[k] = v; continue; }
+  }
+  return out;
+}
 
 // ── CompanionError ───────────────────────────────────────────
 
@@ -63,7 +100,10 @@ export function getQwenAvailability(bin = QWEN_BIN) {
  * @returns {{ env: NodeJS.ProcessEnv, warnings: Array<{kind:string, [k:string]:any}> }}
  */
 export function buildSpawnEnv(userSettings) {
-  const env = { ...process.env };
+  // v0.1.1 hotfix:不再全量继承 process.env,只继承白名单,防 ANTHROPIC_API_KEY / OPENAI_API_KEY
+  // 等 parent 的凭据变量泄漏给 qwen child。用户需额外 passthrough 某个 key,通过
+  // QWEN_PLUGIN_ENV_ALLOW="K1,K2" 声明。
+  const env = filterEnvForChild(process.env);
   const proxy = userSettings?.proxy;
   const warnings = [];
 
@@ -322,6 +362,9 @@ export function detectFailure({ exitCode, resultEvent, assistantTexts }) {
  *
  * v3.1 / Phase 0 case-11-decision:维持默认 auto-edit(auto-deny shell tools 无 TTY)。
  */
+// v0.1.1: F-7 qwen 强校验 --session-id / -r 为 UUID,plugin 层提前拦截报清晰错误
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function buildQwenArgs({
   prompt,
   sessionId, resumeLast, resumeId,
@@ -337,6 +380,19 @@ export function buildQwenArgs({
     throw new CompanionError(
       "require_interactive",
       "Background rescue with yolo requires --unsafe. Add --unsafe or switch to foreground."
+    );
+  }
+
+  if (sessionId != null && !UUID_RE.test(sessionId)) {
+    throw new CompanionError(
+      "invalid_session_id",
+      `--session-id must be a UUID (got "${sessionId}"). Use crypto.randomUUID() or omit.`
+    );
+  }
+  if (resumeId != null && !UUID_RE.test(resumeId)) {
+    throw new CompanionError(
+      "invalid_session_id",
+      `-r resume-id must be a UUID (got "${resumeId}").`
     );
   }
 
@@ -514,18 +570,60 @@ export function parseStreamEvents(text) {
  * @param {{ sleepMs?, killFn? }} opts — killFn 仅测试用 mock
  * @returns {Promise<{ ok: true } | { ok: false, kind: "cancel_failed", message: string }>}
  */
-export async function cancelJobPgid(pgid, { sleepMs = 2000, killFn = process.kill } = {}) {
+/**
+ * 按 pgid 发信号取消 job。
+ *
+ * v0.1.1 hotfix(P0 race):qwen child 死透后 OS 会回收 pgid 给**无关进程组**。
+ * 直接按 stale pgid 发 SIGKILL 会误杀系统上无关进程。
+ *
+ * 修法:
+ *   1) pre-check:`killFn(-pgid, 0)` 探活,ESRCH → job 已死,直接返 ok
+ *   2) optional verify:`ps -g <pgid> -o command=` 检查 pgid 下有无 qwen;
+ *      没有 → 视为已被 OS 回收,拒绝发杀信号(返 cancel_failed:pgid_recycled)
+ *   3) 只对 verified 活着的 qwen pgid 发 SIGINT→TERM→KILL 序列
+ *
+ * @param {number} pgid
+ * @param {{ sleepMs?: number, killFn?: Function, verifyFn?: Function }} opts
+ *   verifyFn(pgid) → boolean: true=确认 pgid 下有 qwen / false=被回收或无法验证
+ *   缺省 verifyFn 通过 node:child_process spawnSync ps 实现。
+ */
+export async function cancelJobPgid(pgid, { sleepMs = 2000, killFn = process.kill, verifyFn } = {}) {
+  // Step 1: 探活
+  try {
+    killFn(-pgid, 0);
+  } catch (e) {
+    if (e.code === "ESRCH") return { ok: true }; // 已死
+    return { ok: false, kind: "cancel_failed", message: `probe: ${e.message}` };
+  }
+
+  // Step 2: verify 该 pgid 下进程确实是 qwen(防 PID 复用误杀无关进程)
+  const verifier = verifyFn ?? defaultVerifyPgidIsQwen;
+  if (!verifier(pgid)) {
+    return { ok: false, kind: "cancel_failed", message: "pgid_recycled: process group no longer belongs to qwen" };
+  }
+
+  // Step 3: 逐级升级信号
   const signals = ["SIGINT", "SIGTERM", "SIGKILL"];
   for (const sig of signals) {
     try {
       killFn(-pgid, sig);
     } catch (e) {
-      if (e.code === "ESRCH") return { ok: true }; // 已死,正常
+      if (e.code === "ESRCH") return { ok: true };
       return { ok: false, kind: "cancel_failed", message: `${sig}: ${e.message}` };
     }
     await new Promise(r => setTimeout(r, sleepMs));
   }
   return { ok: true };
+}
+
+function defaultVerifyPgidIsQwen(pgid) {
+  try {
+    const r = spawnSync("ps", ["-g", String(pgid), "-o", "command="], { encoding: "utf8" });
+    if (r.status !== 0) return false; // ps failed → pgid 已无进程或 platform 不支持
+    return /qwen/i.test(r.stdout);
+  } catch {
+    return false; // 无法验证 → 保守拒
+  }
 }
 
 // ── tryLocalRepair:本地 JSON 修复(§5.3) ──────────────────

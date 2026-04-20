@@ -240,3 +240,47 @@ export function runQwenPing({ env, cwd, bin = QWEN_BIN } = {}) {
 export async function callQwenStreaming() {
   throw new Error("callQwenStreaming: not implemented yet (see Task 2.8–2.9)");
 }
+
+// ── classifyApiError(§5.1 v3.1) ────────────────────────────
+
+/**
+ * 把 [API Error: ...] 文本分类为具体 kind。
+ *
+ * 优先级:
+ * 1. qwen 格式 [API Error: NNN ...] 提取状态码(F-2 实测)
+ * 2. fallback 到 (Status: NNN) 格式兼容其他 provider
+ * 3. DashScope 特化 (108 / content sensitive)
+ * 4. 关键词兜底(带 \b 边界防误伤)
+ * 5. 完全未命中 → api_error_unknown
+ */
+export function classifyApiError(msg) {
+  const m = String(msg ?? "");
+
+  // 1. 状态码优先(v3.1 F-2):qwen 格式 [API Error: NNN ...] 优先;
+  //    (Status: NNN) 作兼容其他 provider 的 fallback
+  let statusMatch = m.match(/\[API Error:\s*(\d{3})\b/i);
+  if (!statusMatch) statusMatch = m.match(/\bStatus:\s*(\d{3})\b/i);
+  if (statusMatch) {
+    const code = parseInt(statusMatch[1], 10);
+    if (code === 401 || code === 403) return { failed: true, kind: "not_authenticated", status: code, message: m };
+    if (code === 429)                 return { failed: true, kind: "rate_limited",      status: code, message: m };
+    if (code === 400)                 return { failed: true, kind: "invalid_request",   status: code, message: m };
+    if (code >= 500 && code < 600)    return { failed: true, kind: "server_error",      status: code, message: m };
+  }
+
+  // 2. DashScope 特定(qwen 后端)
+  if (/\berror code 108\b|\binsufficient.?balance\b|\bquota.?exceed/i.test(m))
+    return { failed: true, kind: "insufficient_balance", message: m };
+  if (/\bcontent.?sensitive\b|\bsensitive\b|\bmoderation\b|\bcontent.?(?:filter|policy|unsafe)/i.test(m))
+    return { failed: true, kind: "content_sensitive", message: m };
+
+  // 3. 关键词兜底(带 \b 边界防误伤)
+  if (/\brate.?limit\b|\bthrottl/i.test(m))               return { failed: true, kind: "rate_limited", message: m };
+  if (/\bquota\b|\bbilling\b/i.test(m))                   return { failed: true, kind: "quota_or_billing", message: m };
+  if (/\bunauthoriz|\binvalid.*access.?token\b/i.test(m)) return { failed: true, kind: "not_authenticated", message: m };
+  if (/\bmax.*output.*tokens\b/i.test(m))                 return { failed: true, kind: "max_output_tokens", message: m };
+  if (/\bconnection\b|\bnetwork\b|\btimeout\b|\bECONNRESET\b|\bENOTFOUND\b/i.test(m))
+                                                          return { failed: true, kind: "network_error", message: m };
+
+  return { failed: true, kind: "api_error_unknown", message: m };
+}

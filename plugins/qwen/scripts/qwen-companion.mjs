@@ -25,6 +25,9 @@ import {
   upsertJob,
   writeJobFile,
   listJobs,
+  resolveJobFile,
+  loadState,
+  saveState,
 } from "./lib/state.mjs";
 import { runCommand } from "./lib/process.mjs";
 import {
@@ -39,9 +42,12 @@ const USAGE = `Usage: qwen-companion <subcommand> [options]
 
 Subcommands:
   setup [--json] [--enable-review-gate] [--disable-review-gate]
+                                       Check qwen installation & auth; persist gate config
   task  [--background|--wait] [--unsafe] [--resume-last] [--session-id <uuid>] <prompt>
   task-resume-candidate [--json]    Check if a resumable task exists in this repo
   cancel <jobId> [--json]           Cancel a running background task
+  status [<jobId>] [--json] [--all]    List jobs or show single job (with orphan detection)
+  result <jobId> [--json]              Show stored job payload (result + permissionDenials)
   review              [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]
   adversarial-review  [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]
 
@@ -52,6 +58,21 @@ function runSetup(rawArgs) {
   const { options } = parseArgs(rawArgs, {
     booleanOptions: ["json", "enable-review-gate", "disable-review-gate"],
   });
+
+  // v3.1:--enable-review-gate / --disable-review-gate 持久化到 state.json
+  if (options["enable-review-gate"] || options["disable-review-gate"]) {
+    try {
+      const cwd = process.cwd();
+      ensureStateDir(cwd);
+      const state = loadState(cwd) || {};
+      state.config = state.config || {};
+      state.config.stopReviewGate = options["enable-review-gate"] === true;
+      saveState(cwd, state);
+    } catch (e) {
+      // 若 state 写失败,不阻塞 setup 主流程,只打警告到 stderr
+      process.stderr.write(`warning: failed to persist review-gate state: ${e.message}\n`);
+    }
+  }
 
   const availability = getQwenAvailability();
   const installers = detectInstallers();
@@ -98,6 +119,10 @@ function runSetup(rawArgs) {
     warnings,
     installers,
   };
+
+  // v3.1: 补 stopReviewGate 字段
+  const setupState = loadState(process.cwd());
+  status.stopReviewGate = setupState?.config?.stopReviewGate === true;
 
   if (options.json) {
     process.stdout.write(JSON.stringify(status, null, 2) + "\n");
@@ -308,6 +333,123 @@ async function runCancel(rawArgs) {
   }
 }
 
+// status 子命令 — §4.6 / §5.4 含 orphan 探测
+async function runStatus(rawArgs) {
+  const { options, positionals } = parseArgs(rawArgs, {
+    booleanOptions: ["wait", "all", "json"],
+    valueOptions: ["timeout-ms"],
+  });
+  const cwd = process.cwd();
+  const jobId = positionals[0];
+
+  // pid 探活 + orphan 迁移
+  function refreshJobLiveness(job) {
+    if (job.status !== "running" || !job.pid) return job;
+    try {
+      process.kill(job.pid, 0); // 探测,不发信号
+      return job;
+    } catch (e) {
+      if (e.code === "ESRCH") {
+        const updated = {
+          ...job,
+          status: "failed",
+          failure: { kind: "orphan", message: "process not found at status check" },
+          finishedAt: new Date().toISOString(),
+        };
+        upsertJob(cwd, updated);
+        return updated;
+      }
+      return job;
+    }
+  }
+
+  if (jobId) {
+    const jobs = listJobs(cwd) || [];
+    const job = jobs.find(j => j.jobId === jobId);
+    if (!job) {
+      process.stdout.write(JSON.stringify({ error: "job not found", jobId }, null, 2) + "\n");
+      process.exit(3);
+    }
+    const refreshed = refreshJobLiveness(job);
+    process.stdout.write(JSON.stringify(refreshed, null, 2) + "\n");
+    process.exit(0);
+  }
+
+  // 列表模式
+  const jobs = (listJobs(cwd) || []).map(refreshJobLiveness);
+  if (options.json) {
+    process.stdout.write(JSON.stringify(jobs, null, 2) + "\n");
+  } else {
+    const lines = ["| jobId | kind | status | startedAt | prompt |", "|---|---|---|---|---|"];
+    for (const j of jobs) {
+      const p = (j.prompt || "").slice(0, 40).replace(/\|/g, "/");
+      lines.push(`| ${j.jobId} | ${j.kind || ""} | ${j.status} | ${j.startedAt || ""} | ${p} |`);
+    }
+    process.stdout.write(lines.join("\n") + "\n");
+  }
+  process.exit(0);
+}
+
+// result 子命令 — 显示单 job 的完整负载
+async function runResult(rawArgs) {
+  const { positionals, options } = parseArgs(rawArgs, { booleanOptions: ["json"] });
+  const jobId = positionals[0];
+  if (!jobId) {
+    process.stderr.write("result: jobId required\n");
+    process.exit(2);
+  }
+
+  const cwd = process.cwd();
+
+  // 优先从 jobs/<id>.json 单文件读(完整 payload 含 result、permissionDenials 等)
+  // fallback 到 state.json jobs 数组(可能只有元数据)
+  let job = null;
+  try {
+    const jobFilePath = resolveJobFile(cwd, jobId);
+    if (fs.existsSync(jobFilePath)) {
+      job = JSON.parse(fs.readFileSync(jobFilePath, "utf8"));
+    }
+  } catch { /* ignore */ }
+  if (!job) {
+    const jobs = listJobs(cwd) || [];
+    job = jobs.find(j => j.jobId === jobId);
+  }
+
+  if (!job) {
+    process.stdout.write(JSON.stringify({ error: "job not found", jobId }, null, 2) + "\n");
+    process.exit(3);
+  }
+
+  if (options.json) {
+    process.stdout.write(JSON.stringify(job, null, 2) + "\n");
+  } else {
+    process.stdout.write(`Job: ${job.jobId}\n`);
+    process.stdout.write(`Status: ${job.status}\n`);
+    process.stdout.write(`Kind: ${job.kind || "(unknown)"}\n`);
+    if (job.sessionId) process.stdout.write(`Session: ${job.sessionId}\n`);
+    if (job.startedAt) process.stdout.write(`Started: ${job.startedAt}\n`);
+    if (job.finishedAt) process.stdout.write(`Finished: ${job.finishedAt}\n`);
+    if (job.result) process.stdout.write(`\n--- Result ---\n${job.result}\n`);
+
+    // v3.1 F-4: permissionDenials 高亮
+    if (job.permissionDenials && job.permissionDenials.length > 0) {
+      process.stdout.write(`\n--- Permission Denials (${job.permissionDenials.length}) ---\n`);
+      process.stdout.write(`Qwen 想调用但被 auto-deny 的工具:\n`);
+      for (const pd of job.permissionDenials) {
+        const input = JSON.stringify(pd.tool_input || {}).slice(0, 120);
+        process.stdout.write(`  - ${pd.tool_name}: ${input}\n`);
+      }
+      process.stdout.write(`\n提示:加 --unsafe 重跑让 qwen 实际执行这些工具。\n`);
+    }
+
+    if (job.failure) {
+      process.stdout.write(`\n--- Failure ---\n`);
+      process.stdout.write(JSON.stringify(job.failure, null, 2) + "\n");
+    }
+  }
+  process.exit(0);
+}
+
 // review / adversarial-review 子命令
 async function runReview(rawArgs, { adversarial = false } = {}) {
   const { options, positionals } = parseArgs(rawArgs, {
@@ -432,6 +574,10 @@ async function main() {
       return runTaskResumeCandidate(rest);
     case "cancel":
       return await runCancel(rest);
+    case "status":
+      return await runStatus(rest);
+    case "result":
+      return await runResult(rest);
     case "review":
       return await runReview(rest, { adversarial: false });
     case "adversarial-review":

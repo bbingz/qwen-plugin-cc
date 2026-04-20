@@ -14,3 +14,9 @@ If the user did not pass a job ID:
 If the user did pass a job ID:
 - Present the full JSON output to the user verbatim.
 - Do not summarize or condense.
+
+**Note on background jobs**: bg jobs are lazily finalized. A bg job's stream-json is written
+to a log file during execution; `/qwen:status` (and `/qwen:result`) triggers the log parse
++ state update when the child pid is no longer alive. If you never call status/result, the
+bg job record will stay at `status: running` in state, but the log file on disk has the
+full output.

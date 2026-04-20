@@ -30,6 +30,16 @@ Task 2.11 实装时确认的 UX 语义:
 
 **影响**:Task 2.11 实测过 bg + 无 unsafe → 正常起 job(之前误以为是 bug)。
 
+### F-17. Job schema 字段割裂:`id` vs `jobId`(3-way review 2026-04-21 挖出)
+
+- gemini v0.5.2 血统文件(`job-control.mjs`、`state.mjs` 早期版本)用 `j.id` 作 job 主键
+- qwen companion 架构重写后全用 `j.jobId`(UUID,直接传给 qwen `--session-id`,F-7 约束)
+- 割裂副作用:
+  - `state.mjs::cleanupOrphanedFiles` `jobIds.has(j.id)` → qwen job `id` undefined → 所有 qwen log 文件被当 orphan 删(commit a6fdb7f 表层修复)
+  - `state.mjs::upsertJob` `findIndex(j => j.id === jobPatch.id)` → qwen `jobPatch.id` undefined → 第二个 qwen job 匹上第一个 `undefined === undefined` 覆盖第一个(commit 86ce8d1 根因修复)
+  - `stop-review-gate-hook.mjs` 用 `runningJob.id` 生成提示 → 打出 `Qwen task undefined is still running`(commit 86ce8d1 修复)
+- **当前策略**:`upsertJob` / `cleanupOrphanedFiles` key 都用 `j.jobId ?? j.id` 兼容;新代码一律用 `jobId`。历史 gemini 数据保留可读。
+
 ### F-16. codex hook 脚本依赖重写(Phase 4 Task 4.5/4.6 实装)
 
 从 codex 拷的 `session-lifecycle-hook.mjs` / `stop-review-gate-hook.mjs` 有 6 类 codex 独有依赖,qwen 版必须替换:

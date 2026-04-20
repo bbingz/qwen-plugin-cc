@@ -1,9 +1,9 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "qwen-plugin",
-  "version": "0.1.0",
-  "description": "Qwen Code CLI plugin for Claude Code",
   "owner": { "name": "bing" },
+  "metadata": {
+    "description": "Qwen Code CLI plugin for Claude Code"
+  },
   "plugins": [
     {
       "name": "qwen",

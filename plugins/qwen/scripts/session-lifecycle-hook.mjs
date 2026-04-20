@@ -22,7 +22,8 @@ function terminateProcessTree(pid) {
   }
 }
 
-export const SESSION_ID_ENV = "QWEN_COMPANION_SESSION_ID";
+import { SESSION_ID_ENV } from "./lib/job-control.mjs";
+
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
 
 function resolveWorkspaceRoot(cwd) {

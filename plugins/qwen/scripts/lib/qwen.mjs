@@ -43,3 +43,67 @@ export class CompanionError extends Error {
 export function getQwenAvailability(bin = QWEN_BIN) {
   return binaryAvailable(bin, ["--version"]);
 }
+
+// ── Proxy 注入(§4.3,v3.1 防御层) ────────────────────────────
+
+/**
+ * v3.1 F-5 实测:多数 qwen 用户 settings.json 无 proxy 字段,
+ * 此函数作为防御层:若 settings 确有 proxy,按四键全量注入 + 冲突检测。
+ *
+ * 步骤:
+ * 1. 四键全量收集 env 值,检查内部一致性
+ * 2. 若 env 内部不一致 → proxy_env_mismatch warning,跳过 settings 注入
+ * 3. 否则,若 settings.proxy 存在:
+ *    - env 无 → 注入四大小写
+ *    - env 有且一致 → noop
+ *    - env 有且冲突 → proxy_conflict warning,不覆盖
+ * 4. NO_PROXY 合并(而非覆盖)默认 bypass
+ *
+ * @param {{ proxy?: string } | null} userSettings
+ * @returns {{ env: NodeJS.ProcessEnv, warnings: Array<{kind:string, [k:string]:any}> }}
+ */
+export function buildSpawnEnv(userSettings) {
+  const env = { ...process.env };
+  const proxy = userSettings?.proxy;
+  const warnings = [];
+
+  // 步骤 1:四键全量收集
+  const seen = PROXY_KEYS
+    .map((k) => ({ key: k, value: env[k] }))
+    .filter((x) => x.value);
+  const uniqueValues = [...new Set(seen.map((x) => x.value))];
+
+  if (uniqueValues.length > 1) {
+    warnings.push({
+      kind: "proxy_env_mismatch",
+      message: "env has conflicting proxy values across HTTP(S)_PROXY keys",
+      detail: seen,
+    });
+    // 跳过 settings 注入,交 env 作者自己解决
+  } else {
+    const existing = uniqueValues[0];
+
+    // 步骤 2:settings vs env 对齐
+    if (proxy) {
+      if (!existing) {
+        // 四键都写(Linux undici 大小写敏感 + Go qwen 优先大写,double-write 最稳)
+        for (const k of PROXY_KEYS) env[k] = proxy;
+      } else if (existing !== proxy) {
+        warnings.push({ kind: "proxy_conflict", settings: proxy, env: existing });
+        // 不覆盖
+      }
+      // existing === proxy → noop
+    }
+  }
+
+  // 步骤 3:NO_PROXY merge
+  const userBypass = (env.NO_PROXY ?? env.no_proxy ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const merged = Array.from(new Set([...userBypass, ...NO_PROXY_DEFAULTS])).join(",");
+  env.NO_PROXY = merged;
+  env.no_proxy = merged;
+
+  return { env, warnings };
+}

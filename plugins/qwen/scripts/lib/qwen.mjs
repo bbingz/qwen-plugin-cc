@@ -318,6 +318,81 @@ export function detectFailure({ exitCode, resultEvent, assistantTexts }) {
   return { failed: false };
 }
 
+// ── 参数装配(§4.2) ──────────────────────────────────────────
+
+/**
+ * 按 spec §4.2 装配 qwen CLI 参数。
+ * 决定 approvalMode 的落点:
+ * - 用户显式 userApprovalMode → 尊重
+ * - 否则 unsafeFlag ? "yolo" : "auto-edit"
+ * - background + !unsafeFlag + yolo 结果 → 抛 CompanionError("require_interactive")
+ *
+ * v3.1 / Phase 0 case-11-decision:维持默认 auto-edit(auto-deny shell tools 无 TTY)。
+ */
+export function buildQwenArgs({
+  prompt,
+  sessionId, resumeLast, resumeId,
+  approvalMode: userApprovalMode,
+  unsafeFlag, background,
+  maxSteps = 20,
+  appendSystem,
+  appendDirs,
+}) {
+  let approvalMode = userApprovalMode;
+  if (!approvalMode) approvalMode = unsafeFlag ? "yolo" : "auto-edit";
+  if (background && !unsafeFlag && approvalMode === "yolo") {
+    throw new CompanionError(
+      "require_interactive",
+      "Background rescue with yolo requires --unsafe. Add --unsafe or switch to foreground."
+    );
+  }
+
+  const args = [];
+  if (sessionId)        args.push("--session-id", sessionId);
+  else if (resumeLast)  args.push("-c");
+  else if (resumeId)    args.push("-r", resumeId);
+
+  args.push("--output-format", "stream-json");
+  args.push("--approval-mode", approvalMode);
+  args.push("--max-session-turns", String(maxSteps));
+  if (appendSystem) args.push("--append-system-prompt", appendSystem);
+  if (appendDirs && appendDirs.length) args.push("--include-directories", appendDirs.join(","));
+
+  args.push(prompt); // 位置参数
+
+  return { args, approvalMode };
+}
+
+/**
+ * 按 spec §4.2 spawn qwen 子进程。
+ * - detached: true(独立 pgid,cancel 靠 pgid 信号)
+ * - background: child.unref()(companion 可退);foreground: 调用方 await exit
+ *
+ * 不做 stream 边解析边判错(那是 streamQwenOutput 的事,Task 2.9)。
+ *
+ * @param {{ args, env, cwd, background, bin, stdio }} opts
+ * @returns {{ child }} — 同步返 child handle(不 await)
+ */
+export function spawnQwenProcess({
+  args, env, cwd,
+  background = false,
+  bin = QWEN_BIN,
+  stdio = ["ignore", "pipe", "pipe"],
+}) {
+  const child = spawn(bin, args, {
+    env, cwd,
+    detached: true,   // v3.1 / Claude P0: 独立 pgid
+    stdio,
+  });
+
+  // v3.1 / Claude P0: 仅 background 下 unref,foreground 需 companion 等 exit
+  if (background) {
+    child.unref();
+  }
+
+  return { child };
+}
+
 // ── Stream JSON 事件解析(离线版,一次性消化字符串) ────────
 
 /**

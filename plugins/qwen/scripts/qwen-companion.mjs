@@ -17,6 +17,7 @@ import {
   streamQwenOutput,
   detectFailure,
   CompanionError,
+  cancelJobPgid,
 } from "./lib/qwen.mjs";
 import {
   ensureStateDir,
@@ -32,6 +33,7 @@ Subcommands:
   setup [--json] [--enable-review-gate] [--disable-review-gate]
   task  [--background|--wait] [--unsafe] [--resume-last] [--session-id <uuid>] <prompt>
   task-resume-candidate [--json]    Check if a resumable task exists in this repo
+  cancel <jobId> [--json]           Cancel a running background task
 
 (More subcommands arrive in Phase 2+.)`;
 
@@ -248,6 +250,54 @@ function runTaskResumeCandidate(rawArgs) {
   process.exit(0);
 }
 
+// cancel 子命令 — §5.5
+async function runCancel(rawArgs) {
+  const { options, positionals } = parseArgs(rawArgs, { booleanOptions: ["json"] });
+  const jobId = positionals[0];
+  const cwd = process.cwd();
+
+  if (!jobId) {
+    process.stderr.write("cancel: jobId required\n");
+    process.exit(2);
+  }
+
+  // 从 state.json 找 job
+  const jobs = listJobs(cwd) || [];
+  const job = jobs.find(j => j.jobId === jobId);
+  if (!job) {
+    process.stdout.write(JSON.stringify({ ok: false, reason: "not_found", jobId }, null, 2) + "\n");
+    process.exit(3);
+  }
+  if (job.status !== "running") {
+    process.stdout.write(JSON.stringify({ ok: false, reason: `job is ${job.status}, not running`, jobId }, null, 2) + "\n");
+    process.exit(0);
+  }
+  if (!job.pgid) {
+    process.stdout.write(JSON.stringify({ ok: false, reason: "no pgid recorded", jobId }, null, 2) + "\n");
+    process.exit(3);
+  }
+
+  // 发信号
+  const r = await cancelJobPgid(job.pgid, { sleepMs: 2000 });
+
+  if (r.ok) {
+    const updated = { ...job, status: "cancelled", finishedAt: new Date().toISOString() };
+    upsertJob(cwd, updated);
+    process.stdout.write(`Cancelled ${jobId}\n`);
+    process.exit(0);
+  } else {
+    const updated = {
+      ...job,
+      status: "failed",
+      failure: { kind: r.kind, message: r.message },
+      finishedAt: new Date().toISOString(),
+    };
+    upsertJob(cwd, updated);
+    process.stdout.write(JSON.stringify({ ok: false, kind: r.kind, message: r.message, jobId }, null, 2) + "\n");
+    process.exit(5);
+  }
+}
+
 // Dispatcher
 const UNPACK_SAFE_SUBCOMMANDS = new Set(["setup"]);
 
@@ -274,6 +324,8 @@ async function main() {
       return await runTask(rest);
     case "task-resume-candidate":
       return runTaskResumeCandidate(rest);
+    case "cancel":
+      return await runCancel(rest);
     case undefined:
     case "--help":
     case "-h":

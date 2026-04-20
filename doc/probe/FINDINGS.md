@@ -30,6 +30,21 @@ Task 2.11 实装时确认的 UX 语义:
 
 **影响**:Task 2.11 实测过 bg + 无 unsafe → 正常起 job(之前误以为是 bug)。
 
+### F-16. codex hook 脚本依赖重写(Phase 4 Task 4.5/4.6 实装)
+
+从 codex 拷的 `session-lifecycle-hook.mjs` / `stop-review-gate-hook.mjs` 有 6 类 codex 独有依赖,qwen 版必须替换:
+
+| codex 依赖 | qwen 替换 |
+|---|---|
+| `./lib/app-server.mjs`(BROKER_ENDPOINT_ENV) | **删除**(MCP app-server 特有,qwen 不用) |
+| `./lib/broker-lifecycle.mjs` | **删除**(同上) |
+| `./lib/workspace.mjs::resolveWorkspaceRoot` | 内联最小版(仿 git.mjs::ensureGitRepository) |
+| `./lib/process.mjs::terminateProcessTree` | 内联最小版(qwen process.mjs 没导出此函数) |
+| `./lib/tracked-jobs.mjs::SESSION_ID_ENV` | `./lib/job-control.mjs::SESSION_ID_ENV`(qwen 同名常量在 job-control) |
+| `./lib/qwen.mjs::getQwenAvailability(cwd)` | qwen 版签名是 `(bin)`,改 `getQwenAvailability()` 无参 |
+
+**影响**:Phase 5 打磨时若需重新 merge codex 更新,要复核这些点;长期看需要把 `terminateProcessTree` 加到 `process.mjs` 变正式 API,不留内联版。
+
 ### F-15. `git.mjs::collectReviewContext` 签名与返回
 
 Task 3.7 实装时修正:plan/spec 假设 `collectReviewContext({cwd, base, scope})` 单对象参数返 `{diff,...}`,实际 gemini 版是:

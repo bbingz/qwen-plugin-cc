@@ -16,6 +16,15 @@
 - 真命令:`qwen --version` 或 `qwen -v`
 - **影响**:plan Task 1.4 的 `getQwenAvailability` 实现必须用 `--version` 替代 `-V`
 
+### F-1b. `qwen --version` 输出**裸版本号**,不含 "qwen, version" 前缀
+
+- Phase 1 Task 1.4 实装时发现:`qwen --version` 输出就是 `0.14.5`(单行裸版本)
+- 不是 `qwen, version 0.14.5` 这种格式
+- **影响**:
+  - setup JSON `version` 字段值会是 `"0.14.5"`(不含 "qwen, version"),不影响用户体验
+  - Task 1.4 单元测试正则从 `/qwen, version/` 调整为 `/\d+\.\d+\.\d+/`(semver 匹配)
+- **注**:Phase 0 截图里看到的 "qwen, version 0.14.5" 是 qwen 交互 TUI 的 `/status` 命令输出,不是 `qwen --version`
+
 ### F-2. API Error 格式是 `[API Error: NNN ...]` 不是 `(Status: NNN)`
 
 - spec §5.1 `classifyApiError` 状态码优先路径用 `\bStatus:\s*(\d{3})\b`

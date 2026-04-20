@@ -170,3 +170,66 @@ export function detectInstallers() {
     shellInstaller: binaryAvailable("sh", ["-c", "command -v curl"]).available,
   };
 }
+
+// ── Ping(探活) ─────────────────────────────────────────────
+
+/**
+ * 跑一次 qwen "ping" 的 stream-json,抓 init + assistant + result 事件。
+ * 不做判错(判错在 §5.1 detectFailure 统一),只返原料。
+ *
+ * v3.1 F-6: 跳过 thinking 块,只收 type==="text" 的 content。
+ *
+ * @returns {{
+ *   exitCode: number | null,
+ *   sessionId: string | null,
+ *   model: string | null,
+ *   mcpServers: string[],
+ *   assistantTexts: string[],
+ *   resultEvent: object | null,
+ *   stderrTail: string,
+ * }}
+ */
+export function runQwenPing({ env, cwd, bin = QWEN_BIN } = {}) {
+  const result = runCommand(
+    bin,
+    ["ping", "--output-format", "stream-json", "--max-session-turns", "1"],
+    { cwd, env: env ?? process.env, timeout: AUTH_CHECK_TIMEOUT_MS }
+  );
+
+  const out = {
+    exitCode: result.status,
+    sessionId: null,
+    model: null,
+    mcpServers: [],
+    assistantTexts: [],
+    resultEvent: null,
+    stderrTail: (result.stderr || "").slice(-500),
+  };
+
+  if (result.error) return out;
+
+  for (const raw of (result.stdout || "").split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("{")) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+
+    if (event.type === "system" && event.subtype === "init") {
+      out.sessionId = event.session_id ?? null;
+      out.model = event.model ?? null;
+      out.mcpServers = Array.isArray(event.mcp_servers) ? event.mcp_servers : [];
+    } else if (event.type === "assistant") {
+      const blocks = event.message?.content ?? [];
+      for (const b of blocks) {
+        // F-6: 只收 text,跳过 thinking 块
+        if (b?.type === "text" && typeof b.text === "string") {
+          out.assistantTexts.push(b.text);
+        }
+      }
+    } else if (event.type === "result") {
+      out.resultEvent = event;
+    }
+  }
+
+  return out;
+}

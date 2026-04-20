@@ -1,0 +1,6 @@
+{
+  "case": "04-timeout",
+  "stdout_excerpt": "",
+  "exit_code": 143,
+  "notes": "Node spawn + SIGTERM after 3s;exit 143 = 128+15"
+}

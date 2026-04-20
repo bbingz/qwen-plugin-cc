@@ -1,0 +1,7 @@
+{
+  "case": "12-api-error-statuses",
+  "status": "inconclusive",
+  "notes": "httpstat.us mock 路径被 coding-plan settings 覆盖,--openai-base-url 实测被忽略(所有 4 个样本 model 仍为 qwen3.5-plus,正常返 pong 而非真 HTTP 错误)。要真正抓到各 Status 码样本,需要先 qwen auth 切换到 openai mode(本机不便做)。跳过 400/404/429/500 的活样本;这些状态码的 classifyApiError 路径交给 Phase 2 Task 2.5 的 mock 字符串单元测试(见 qwen-classify.test.mjs)。真实 401 样本见 case-09-api-error-401.result.json。",
+  "decision": "对 spec §5.1 的 classifyApiError 影响:状态码优先策略仍保留(真实 qwen 确实会吐 Status: NNN),但 Phase 0 阶段单元测试用硬编码字符串替代。",
+  "samples": {}
+}

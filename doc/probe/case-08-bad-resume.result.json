@@ -1,0 +1,7 @@
+{
+  "case": "08-bad-resume",
+  "fake_uuid": "c773d220-920b-4351-91c2-aab3551fdf12",
+  "stdout_excerpt": "No saved session found with ID c773d220-920b-4351-91c2-aab3551fdf12. Run `qwen --resume` without an ID to choose from existing sessions.",
+  "exit_code": 1,
+  "notes": "合法 UUID 但不存在 session 的行为"
+}

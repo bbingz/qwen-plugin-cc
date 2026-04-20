@@ -30,6 +30,23 @@ Task 2.11 实装时确认的 UX 语义:
 
 **影响**:Task 2.11 实测过 bg + 无 unsafe → 正常起 job(之前误以为是 bug)。
 
+### F-15. `git.mjs::collectReviewContext` 签名与返回
+
+Task 3.7 实装时修正:plan/spec 假设 `collectReviewContext({cwd, base, scope})` 单对象参数返 `{diff,...}`,实际 gemini 版是:
+
+```js
+collectReviewContext(cwd, { base, scope = "auto" } = {})
+  // returns: { repoRoot, branch, mode, summary, content }
+```
+
+- **位置参数 cwd + opts 对象**(不是单对象)
+- 返回字段 `content`(含格式化的 status + staged/unstaged diff 拼接),不是裸 `diff`
+- 还返 `mode`(working-tree / branch / staged-only)、`summary`(stat)、`branch`、`repoRoot`
+
+**影响**:Task 3.7 的 runReview 已按实际 API 写(`ctx.content` 喂 runQwen)。spec §4.1 可 v0.2 修订。
+
+真实的 schema enum 实测:`verdict: ["approve", "needs-attention"]`(不是 plan mock 里的 approve/changes_requested)。这个是 codex 原 schema 的固定值,任何使用 review 的测试都应对齐这两个值。
+
 ### F-14. `args.mjs` API:`positionals`(复数)+ `valueOptions`
 
 Task 2.11 实装时修正:plan 假设 `parseArgs` 返 `{options, positional}`(单数),实际 gemini args.mjs 签名是 `{options, positionals}`(复数);字符串选项配置键是 `valueOptions` 而非 `stringOptions`。

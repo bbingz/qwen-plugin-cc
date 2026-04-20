@@ -284,3 +284,36 @@ export function classifyApiError(msg) {
 
   return { failed: true, kind: "api_error_unknown", message: m };
 }
+
+// ── detectFailure 五层(§5.1 v3.1) ──────────────────────────
+
+/**
+ * 五层判错。qwen "exit 0 + is_error:false 但 assistant text 含 [API Error:" 场景完整翻译。
+ *
+ * @param {{ exitCode: number | null, resultEvent: object | null, assistantTexts: string[] }} input
+ */
+export function detectFailure({ exitCode, resultEvent, assistantTexts }) {
+  // 层 1:进程非 0 退出(null = 未退出,交给 timeout 层处理)
+  if (exitCode !== 0 && exitCode !== null)
+    return { failed: true, kind: "exit", code: exitCode };
+
+  // 层 2:qwen 自报 is_error
+  if (resultEvent?.is_error === true)
+    return { failed: true, kind: "qwen_is_error" };
+
+  // 层 3:result 字段含 [API Error:
+  if (resultEvent?.result && /\[API Error:/.test(resultEvent.result))
+    return classifyApiError(resultEvent.result);
+
+  // 层 4:任一 assistant text 含 [API Error:(不锚 ^)
+  const errLine = (assistantTexts || []).find(t => /\[API Error:/.test(t));
+  if (errLine) return classifyApiError(errLine);
+
+  // 层 5:空输出保护
+  const hasText = (assistantTexts || []).length > 0;
+  const hasResult = resultEvent?.result != null && resultEvent.result !== "";
+  if (!hasText && !hasResult && exitCode === 0)
+    return { failed: true, kind: "empty_output" };
+
+  return { failed: false };
+}

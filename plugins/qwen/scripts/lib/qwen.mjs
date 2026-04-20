@@ -656,3 +656,72 @@ ${schemaText}
 
 Fix the JSON to match the schema. Output ONLY the corrected JSON, no prose, no code fences.${final}`;
 }
+
+// ── reviewWithRetry(§5.3 核心) ─────────────────────────────
+
+/**
+ * Review 主路径。最多 3 次尝试(首次 + 2 retry)。
+ * 每轮先 JSON.parse,失败则 tryLocalRepair;本地也修不动才真正 retry。
+ * retry 时**携带上一轮 raw + schema + ajv 错误**(v3.1 Codex P0 精神)。
+ *
+ * @param {object} opts
+ * @param {string} opts.diff
+ * @param {string} opts.schemaText
+ * @param {object} opts.schema
+ * @param {(prompt: object, options?: object) => Promise<string>} opts.runQwen
+ * @param {(data: object, schema: object) => object[] | null} opts.validate
+ * @param {boolean} [opts.adversarial=false]
+ */
+export async function reviewWithRetry({
+  diff, schemaText, schema, runQwen, validate, adversarial = false,
+}) {
+  const attempts = [];
+  let prompt = buildInitialReviewPrompt({ diff, schemaText, adversarial });
+  let previousRaw = null;
+
+  for (let i = 0; i < 3; i++) {
+    const raw = await runQwen(prompt, {
+      maxSteps: i === 0 ? 20 : 1,
+      useResumeSession: i > 0,  // retry 用 -c 续上一轮 session
+    });
+    attempts.push(raw);
+    previousRaw = raw;
+
+    // Step A: 原样 parse + validate
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+    if (parsed) {
+      const errors = validate(parsed, schema);
+      if (!errors) return { ok: true, parsed, attempts };
+    }
+
+    // Step B: 本地 repair
+    parsed = tryLocalRepair(raw);
+    if (parsed) {
+      const errors = validate(parsed, schema);
+      if (!errors) return { ok: true, parsed, attempts, repairedLocally: true };
+    }
+
+    // 构造 retry prompt(若还有下一轮)
+    if (i < 2) {
+      const ajvErrors = parsed
+        ? (validate(parsed, schema) || [])
+        : [{ message: "invalid JSON", instancePath: "/" }];
+      prompt = {
+        user: buildReviewRetryPrompt({
+          previousRaw,
+          schemaText,
+          ajvErrors,
+          attemptNumber: i + 1,
+        }),
+        appendSystem: null,  // retry 不重塞 schema(已在 user prompt 里)
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    kind: "schema_violation",
+    attempts,
+  };
+}

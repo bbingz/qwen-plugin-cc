@@ -8,7 +8,7 @@
     {
       "name": "qwen",
       "description": "Use Qwen from Claude Code to review code or delegate tasks.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": { "name": "bing" },
       "source": "./plugins/qwen",
       "category": "development"

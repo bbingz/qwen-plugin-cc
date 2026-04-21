@@ -46,3 +46,31 @@ test("tryLocalRepair: 带尾逗号 — 修掉", () => {
   const r = tryLocalRepair('{"a":1,"b":2,}');
   assert.deepEqual(r, { a: 1, b: 2 });
 });
+
+test("tryLocalRepair: string 内含 } 不误算 bracket(缺尾 })", () => {
+  // "x}" 里的 } 不应抵消对 { 的闭合;repair 应补一个 }。
+  const r = tryLocalRepair('{"a":"x}"');
+  assert.deepEqual(r, { a: "x}" });
+});
+
+test("tryLocalRepair: string 内含 { 不被当作新 object", () => {
+  const r = tryLocalRepair('{"a":"{not-json","b":2');
+  assert.deepEqual(r, { a: "{not-json", b: 2 });
+});
+
+test("tryLocalRepair: 末尾 string truncation → 补 \" + 闭合", () => {
+  // qwen timeout 常吐这种尾断;当前代码只会补 },修不了。
+  const r = tryLocalRepair('{"summary":"very long text got cut');
+  assert.deepEqual(r, { summary: "very long text got cut" });
+});
+
+test("tryLocalRepair: truncation 嵌套 object 中", () => {
+  const r = tryLocalRepair('{"a":1,"b":{"msg":"cut mid');
+  assert.deepEqual(r, { a: 1, b: { msg: "cut mid" } });
+});
+
+test("tryLocalRepair: escaped quote 不被当 string 结束", () => {
+  // "x\"y" 内的 \" 是转义,不结束 string;后续 } 也不应误算。
+  const r = tryLocalRepair('{"a":"x\\"y}"');
+  assert.deepEqual(r, { a: 'x"y}' });
+});

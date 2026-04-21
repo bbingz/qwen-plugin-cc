@@ -651,36 +651,56 @@ export function tryLocalRepair(raw) {
   const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
   if (fenceMatch) text = fenceMatch[1].trim();
 
-  // Step 3: 找第一个 { 或 [,最后一个 } 或 ]
+  // Step 3: 找第一个 { 或 [,最后一个 } 或 ]。尾断(truncation)时没有末尾 }/],
+  // 允许 lastBrace 缺,后面 Step 5 用 string-aware 扫描从首 brace 到末尾补齐。
   const firstBrace = Math.min(
     ...["{", "["].map(c => { const i = text.indexOf(c); return i < 0 ? Infinity : i; })
   );
+  if (firstBrace === Infinity) return null;
   const lastBrace = Math.max(
     ...["}", "]"].map(c => text.lastIndexOf(c))
   );
-  if (firstBrace === Infinity || lastBrace < 0) return null;
-  text = text.slice(firstBrace, lastBrace + 1);
+  // 有末尾闭合 brace:试原样 slice + parse;没有则留给 Step 5 补齐。
+  if (lastBrace > firstBrace) {
+    const sliced = text.slice(firstBrace, lastBrace + 1);
+    try { return JSON.parse(sliced); } catch {}
 
-  try { return JSON.parse(text); } catch {}
-
-  // Step 4: 去尾逗号
-  const noTrailing = text.replace(/,(\s*[}\]])/g, "$1");
-  try { return JSON.parse(noTrailing); } catch {}
-
-  // Step 5: 补缺失 } / ](简单 bracket 计数)
-  let fixed = noTrailing;
-  const stack = [];
-  for (const ch of fixed) {
-    if (ch === "{" || ch === "[") stack.push(ch);
-    else if (ch === "}") stack.pop();
-    else if (ch === "]") stack.pop();
+    const noTrailing = sliced.replace(/,(\s*[}\]])/g, "$1");
+    try { return JSON.parse(noTrailing); } catch {}
   }
+
+  // Step 5: string-aware 扫描 + truncation 修复。
+  // 从 firstBrace 扫到末尾,跟踪 inString/escape,正确计 bracket;若最终在 string 内
+  // (qwen timeout 尾断),先补 ";然后补齐缺失的 }/]。
+  const tail = text.slice(firstBrace);
+  const stack = [];
+  let inString = false;
+  let escape = false;
+  for (const ch of tail) {
+    if (escape) { escape = false; continue; }
+    if (inString) {
+      if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{" || ch === "[") stack.push(ch);
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+
+  let fixed = tail;
+  if (inString) fixed += '"';
+  // 先去尾逗号再补闭合(补完顺序反转栈)。
+  fixed = fixed.replace(/,(\s*)$/, "$1");
   while (stack.length) {
     const open = stack.pop();
     fixed += open === "{" ? "}" : "]";
   }
 
   try { return JSON.parse(fixed); } catch {}
+
+  // 最后兜底:补完后再去一次中段尾逗号。
+  try { return JSON.parse(fixed.replace(/,(\s*[}\]])/g, "$1")); } catch {}
 
   return null;
 }

@@ -11,6 +11,19 @@ import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { getConfig, listJobs } from "./lib/state.mjs";
 import { sortJobsNewestFirst } from "./lib/job-control.mjs";
 import { SESSION_ID_ENV } from "./lib/job-control.mjs";
+import { isQwenCommandLine } from "./lib/qwen.mjs";
+
+// v0.2.1 P0-1 hotfix:对齐 job-lifecycle.defaultVerifyPidIsQwen,防 PID 复用
+// 假活。保守策略:ps 失败返 true(保留当前行为 — 视为活)。
+function verifyPidIsQwen(pid) {
+  try {
+    const r = spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
+    if (r.status !== 0) return true;
+    return isQwenCommandLine(r.stdout);
+  } catch {
+    return true;
+  }
+}
 import { resolveWorkspaceRoot } from "./lib/git.mjs";
 
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
@@ -150,8 +163,11 @@ function main() {
   const runningJob = jobs.find((job) => {
     if (job.status !== "queued" && job.status !== "running") return false;
     if (!job.pid) return true; // 没 pid 字段当 running 处理
-    try { process.kill(job.pid, 0); return true; }
+    try { process.kill(job.pid, 0); }
     catch { return false; } // ESRCH = 已死,skip
+    // v0.2.1 P0-1:probe 成功只说 pid 存在,OS 可能回收给无关进程。
+    // verify 命令行是 qwen 才算真活;保守策略:ps 不支持时仍视为活。
+    return verifyPidIsQwen(job.pid);
   });
   const runningJobId = runningJob ? runningJob.jobId : null;
   const runningTaskNote = runningJob

@@ -722,11 +722,28 @@ export async function cancelJobPgid(pgid, { sleepMs = 2000, killFn = process.kil
   return { ok: true };
 }
 
+/**
+ * 判断 `ps -o command=` 输出的某一行是不是真 qwen CLI 的命令行。
+ *
+ * v0.2.1 hotfix:v0.1.1 用 `/qwen/i` substring 在 workspace 叫 `qwen-plugin-cc`
+ * 时会对 `node /path/to/qwen-plugin-cc/foo.mjs`、`vim qwen-plugin-cc/x` 这种无关
+ * 进程恒真,PID/pgid 复用保护失效。改精确匹配:basename 必须是 qwen(前面是
+ * 开头或 `/`,后面是空格或行尾)。
+ *
+ * Qwen CLI 是 node 脚本(`#!/usr/bin/env node`),spawn 后 command 通常是
+ * `/path/to/node /path/to/qwen <args>` 或直接 `/path/to/qwen <args>`,basename
+ * 必有 `qwen\s`。Workspace 路径 `/qwen-plugin-cc/` 里的 `qwen-` 不匹配。
+ */
+export function isQwenCommandLine(text) {
+  if (typeof text !== "string" || !text) return false;
+  return /(^|\/)qwen(\s|$)/m.test(text);
+}
+
 function defaultVerifyPgidIsQwen(pgid) {
   try {
     const r = spawnSync("ps", ["-g", String(pgid), "-o", "command="], { encoding: "utf8" });
     if (r.status !== 0) return false; // ps failed → pgid 已无进程或 platform 不支持
-    return /qwen/i.test(r.stdout);
+    return isQwenCommandLine(r.stdout);
   } catch {
     return false; // 无法验证 → 保守拒
   }

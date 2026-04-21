@@ -29,16 +29,18 @@ function writeStreamLog(logFile, { withResult = true, assistantText = "ok" } = {
   fs.writeFileSync(logFile, lines.join("\n") + "\n");
 }
 
-test("refreshJobLiveness: 活 pid 直接返原 job(不 finalize)", () => {
+test("refreshJobLiveness: 活 pid + verifyFn 说是 qwen → 返原 job(不 finalize)", () => {
+  // v0.2.1 P0-1:活 pid 不够,还要 verifyFn 确认是 qwen basename。
+  // 用 process.pid 但 inject verifyFn=() => true 模拟"命令行是 qwen"。
   withTempCwd((cwd) => {
     const job = {
       jobId: "job-alive",
       status: "running",
-      pid: process.pid, // 自己肯定活着
+      pid: process.pid,
     };
-    const out = refreshJobLiveness(cwd, job);
+    const out = refreshJobLiveness(cwd, job, { verifyFn: () => true });
     assert.equal(out.status, "running");
-    assert.equal(out, job); // 同一引用
+    assert.equal(out, job);
   });
 });
 

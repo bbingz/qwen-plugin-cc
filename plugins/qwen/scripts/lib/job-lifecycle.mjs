@@ -2,7 +2,7 @@ import fs from "node:fs";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 
-import { parseStreamEvents, detectFailure, normalizePermissionDenials } from "./qwen.mjs";
+import { parseStreamEvents, detectFailure, normalizePermissionDenials, isQwenCommandLine } from "./qwen.mjs";
 import { writeJobFile, upsertJob } from "./state.mjs";
 
 // P0-7: refreshJobLiveness 被 /qwen:status list、/qwen:result、SessionEnd hook 同步调用。
@@ -53,12 +53,15 @@ function readLogTail(logPath, maxBytes = LOG_TAIL_BYTES) {
 /**
  * 默认 pid 归属验证:`ps -p <pid>` 检查 command 是否 qwen,防 PID 复用假活。
  * 保守策略:ps 本身失败(platform/race)返 true,避免把真 qwen 误标 failed。
+ *
+ * v0.2.1:用 lib/qwen.mjs 共享的 isQwenCommandLine(精确 basename 匹配),修复
+ * v0.2 用 `/qwen/i` substring 在 workspace 叫 qwen-plugin-cc 时恒真的 bug。
  */
 function defaultVerifyPidIsQwen(pid) {
   try {
     const r = spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
     if (r.status !== 0) return true; // ps 查不到:保守保留 running
-    return /qwen/i.test(r.stdout);
+    return isQwenCommandLine(r.stdout);
   } catch {
     return true; // platform 不支持 ps:保守保留 running
   }

@@ -40,6 +40,7 @@ import {
   resolveWorkspaceRoot,
 } from "./lib/git.mjs";
 import { refreshJobLiveness } from "./lib/job-lifecycle.mjs";
+import { validateReviewOutput } from "./lib/review-validate.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -540,22 +541,10 @@ async function runReview(rawArgs, { adversarial = false } = {}) {
   const schemaText = fs.readFileSync(schemaPath, "utf8");
   const schema = JSON.parse(schemaText);
 
-  // 简易验证:required + 基础 enum
-  // (v0.2 可升级为真 ajv;当前避免外部依赖)
-  const validate = (data, s) => {
-    if (typeof data !== "object" || data === null) {
-      return [{ message: "not object", instancePath: "/" }];
-    }
-    const errors = [];
-    for (const req of s.required ?? []) {
-      if (!(req in data)) errors.push({ message: `required: ${req}`, instancePath: `/${req}` });
-    }
-    if (s.properties?.verdict?.enum && data.verdict &&
-        !s.properties.verdict.enum.includes(data.verdict)) {
-      errors.push({ message: `verdict '${data.verdict}' not in enum`, instancePath: "/verdict" });
-    }
-    return errors.length ? errors : null;
-  };
+  // v0.2 DX-1:走 review-validate.mjs 的扩充 validator(type / enum / required /
+  // additionalProperties / minLength / minimum / maximum / nested items),
+  // 零外部依赖。取代之前只查 required + verdict.enum 的 stub。
+  const validate = validateReviewOutput;
 
   // 构造 runQwen 闭包
   const userSettings = readQwenSettings();

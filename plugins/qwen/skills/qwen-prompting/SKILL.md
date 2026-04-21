@@ -43,7 +43,7 @@ Prompt Qwen like an operator. Compact, block-structured with XML tags. State the
 
 - 用 built-in `review` / `adversarial-review` 命令:本身已有 contract。
 - 用 `task`:diagnosis / planning / research / implementation,需要更细 prompt 控制。
-- 用 `task --resume` 做跟进:只发 delta 指令,不重复整段 prompt,除非方向实质改变。
+- 用 `task --resume-last` 做跟进:只发 delta 指令,不重复整段 prompt,除非方向实质改变。
 
 ## Working rules
 

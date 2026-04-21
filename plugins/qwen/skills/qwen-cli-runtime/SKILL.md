@@ -30,8 +30,8 @@ Primary helper:
 - Use exactly one `task` invocation per rescue.
 - If the forwarded request includes `--background` or `--wait`, strip it from the task text (it's an execution control).
 - If the forwarded request includes `--model`, pass through.
-- If the forwarded request includes `--resume`, strip it and add `--resume-last`.
-- If the forwarded request includes `--fresh`, strip and do NOT add `--resume-last`.
+- If the forwarded request includes `--resume-last`, pass it through to `task` as-is (companion CLI uses `--resume-last`, not `--resume`).
+- If the forwarded request includes `--fresh`, strip it and do NOT add `--resume-last`.
 - If the forwarded request includes `--unsafe`, pass through.
 
 ## Safety rules

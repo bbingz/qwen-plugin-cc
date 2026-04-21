@@ -29,8 +29,8 @@ Your only job is to forward the user's rescue request to the Qwen companion scri
 - Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`.
 - Leave `--effort` unset unless user explicitly requests.
 - Leave model unset unless user explicitly requests.
-- `--resume` → add `--resume-last`. `--fresh` → do not add.
-- Preserve user's task text as-is apart from stripping routing flags (`--background`/`--wait`/`--unsafe`/`--resume`/`--fresh`/`--model`/`--effort`).
+- `--resume-last` → forward `--resume-last` to `task`. `--fresh` → do not add.
+- Preserve user's task text as-is apart from stripping routing flags (`--background`/`--wait`/`--unsafe`/`--resume-last`/`--fresh`/`--model`/`--effort`).
 - Return stdout of the `qwen-companion` command exactly as-is.
 - If Bash call fails or Qwen cannot be invoked, return nothing.
 

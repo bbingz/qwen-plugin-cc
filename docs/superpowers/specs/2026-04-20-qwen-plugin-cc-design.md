@@ -199,14 +199,12 @@ plugins/qwen/
 - `--effort` 透传但 companion 层丢弃(§9-3)
 - `--model` 默认不传
 - **默认 `--approval-mode auto-edit`**;`--unsafe` 显式切 yolo
-- **Background 未显式 `--unsafe`**:companion 拒启动,返回 `require_interactive`
-- `--resume` → `-c` 或 `-r <id>`,`--fresh` → 不传
+- **Background + 显式 `--approval-mode yolo` + 未带 `--unsafe`** → companion 拒启动,返回 `require_interactive`(F-13)。Background + 默认 `auto-edit`(无 --unsafe)或 Background + `--unsafe`(显式同意 yolo)均允许。
+- `--resume-last` → `-c`,`--session-id <uuid>` / `-r <uuid>` 直接续;`--fresh` → 不传
 
-**决策背景**:`yolo` 等价"auto-approve all tools";background + yolo = 后台不可见放行,安全边界问题,不是便利。
+**决策背景**:`yolo` 等价"auto-approve all tools";background + yolo 无 `--unsafe` = 后台不可见放行,安全边界问题,不是便利。**但 auto-edit 在 bg 下无 TTY 等于 auto-deny shell/write(F-4 实测)**,安全上等价于 dry-run,可以允许。
 
-**Foreground 策略开放项**:当前默认 `auto-edit`,但 qwen 对非 edit 工具(如 `run_shell_command`)仍 prompt。Claude 的 Bash 子进程无 TTY,若 qwen prompt 会 hang 还是 auto-deny 是**未知**。**Phase 0 必做探针**(§6.2 case 11):
-- 若 auto-deny:当前 `auto-edit` 默认 OK
-- 若 hang:改为"foreground 也要 `--unsafe`"对称方案,v3 保留可回退说明
+**Foreground 策略(F-4 定稿)**:默认 `auto-edit`。qwen 对非 edit 工具(`run_shell_command`)无 TTY 时 **auto-deny**(Phase 0 case-11 实测),不 hang,不 prompt,返回 `permission_denials[]`。用户想真跑 shell 显式加 `--unsafe`。
 
 ### 3.4 命令 `commands/*.md`(7 个)
 

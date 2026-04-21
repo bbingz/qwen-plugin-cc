@@ -61,6 +61,24 @@ test("writeJobFile + readJobFile roundtrip", () => {
   } finally { tmp.restore(); }
 });
 
+test("loadState: legacy { id } → jobId migrate-on-read", () => {
+  const tmp = makeTmpPluginData();
+  try {
+    const cwd = "/tmp/legacy-migrate";
+    state.ensureStateDir(cwd);
+    // 手动写 legacy state.json(gemini 血统只有 id,无 jobId)
+    const stateFile = state.resolveStateFile(cwd);
+    fs.writeFileSync(stateFile, JSON.stringify({
+      version: 1,
+      jobs: [{ id: "old-abc", kind: "task", status: "completed" }],
+    }, null, 2));
+
+    const loaded = state.loadState(cwd);
+    assert.equal(loaded.jobs[0].jobId, "old-abc");
+    assert.equal(loaded.jobs[0].id, "old-abc"); // 原字段保留
+  } finally { tmp.restore(); }
+});
+
 test("listJobs 最多保留一定数量 + 按时间排序", () => {
   const tmp = makeTmpPluginData();
   try {
@@ -69,7 +87,7 @@ test("listJobs 最多保留一定数量 + 按时间排序", () => {
     // listJobs 从 state.json 读取，用 upsertJob 写入
     for (let i = 0; i < 5; i++) {
       state.upsertJob(cwd, {
-        id: randomUUID(),
+        jobId: randomUUID(),
         kind: "task", status: "completed",
         startedAt: new Date(Date.now() - (5 - i) * 1000).toISOString(),
       });

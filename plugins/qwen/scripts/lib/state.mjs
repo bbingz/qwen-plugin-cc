@@ -77,7 +77,16 @@ export function loadState(workspaceRoot) {
       const raw = fs.readFileSync(file, "utf8");
       if (!raw.trim()) continue; // empty file from concurrent write
       const state = JSON.parse(raw);
-      if (state && typeof state === "object") return state;
+      if (state && typeof state === "object") {
+        // Legacy id → jobId migrate-on-read(gemini 血统 v0.5.2 的 id 字段)。
+        // 下次 upsertJob 触发 saveState 时持久化;读路径可以假定 jobId 存在。
+        if (Array.isArray(state.jobs)) {
+          for (const j of state.jobs) {
+            if (j && j.jobId == null && j.id != null) j.jobId = j.id;
+          }
+        }
+        return state;
+      }
     } catch {
       if (attempt < maxRetries - 1) {
         // Brief pause before retry — concurrent writer may still be flushing
@@ -164,7 +173,7 @@ function pruneJobs(jobs) {
 }
 
 function cleanupOrphanedFiles(workspaceRoot, jobs) {
-  const jobIds = new Set(jobs.map((j) => j.jobId ?? j.id));
+  const jobIds = new Set(jobs.map((j) => j.jobId));
   const jobsDir = resolveJobsDir(workspaceRoot);
   try {
     for (const file of fs.readdirSync(jobsDir)) {
@@ -191,11 +200,11 @@ function removeFileIfExists(filePath) {
 export function upsertJob(workspaceRoot, jobPatch) {
   return updateState(workspaceRoot, (state) => {
     const now = new Date().toISOString();
-    // qwen job 用 jobId,gemini 血统用 id。两边都要匹配,防止 undefined === undefined 误覆盖。
-    const patchKey = jobPatch.jobId ?? jobPatch.id;
+    // upsert 的入口 patch 必须带 jobId;loadState 已对存量 legacy `id` migrate。
+    const patchKey = jobPatch.jobId;
     const idx = patchKey == null
       ? -1
-      : state.jobs.findIndex((j) => (j.jobId ?? j.id) === patchKey);
+      : state.jobs.findIndex((j) => j.jobId === patchKey);
     if (idx >= 0) {
       state.jobs[idx] = { ...state.jobs[idx], ...jobPatch, updatedAt: now };
     } else {

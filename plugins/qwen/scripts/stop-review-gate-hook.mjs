@@ -153,8 +153,7 @@ function main() {
     try { process.kill(job.pid, 0); return true; }
     catch { return false; } // ESRCH = 已死,skip
   });
-  // qwen 用 jobId,gemini 血统用 id
-  const runningJobId = runningJob ? (runningJob.jobId ?? runningJob.id) : null;
+  const runningJobId = runningJob ? runningJob.jobId : null;
   const runningTaskNote = runningJob
     ? `Qwen task ${runningJobId} is still running. Check /qwen:status and use /qwen:cancel ${runningJobId} if you want to stop it before ending the session.`
     : null;

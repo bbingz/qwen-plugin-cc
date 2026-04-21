@@ -325,7 +325,7 @@ function runTaskResumeCandidate(rawArgs) {
       const age = Date.now() - new Date(ts).getTime();
       if (age < 24 * 3600 * 1000 && !Number.isNaN(age)) {
         available = true;
-        latestJobId = task.jobId ?? task.id;
+        latestJobId = task.jobId;
       }
     }
   } catch { /* 空 state 也算不可用 */ }
@@ -355,7 +355,7 @@ async function runCancel(rawArgs) {
 
   // 从 state.json 找 job
   const jobs = listJobs(cwd) || [];
-  const job = jobs.find(j => (j.jobId ?? j.id) === jobId);
+  const job = jobs.find(j => j.jobId === jobId);
   if (!job) {
     emit({ ok: false, reason: "not_found" }, `Job ${jobId} not found.`, 3);
   }
@@ -406,7 +406,7 @@ async function runStatus(rawArgs) {
 
   if (jobId) {
     const jobs = listJobs(cwd) || [];
-    const job = jobs.find(j => (j.jobId ?? j.id) === jobId);
+    const job = jobs.find(j => j.jobId === jobId);
     if (!job) {
       process.stdout.write(JSON.stringify({ error: "job not found", jobId }, null, 2) + "\n");
       process.exit(3);
@@ -453,7 +453,7 @@ async function runResult(rawArgs) {
   } catch { /* ignore */ }
   if (!job) {
     const jobs = listJobs(cwd) || [];
-    const raw = jobs.find(j => (j.jobId ?? j.id) === jobId);
+    const raw = jobs.find(j => j.jobId === jobId);
     if (raw) {
       // 如果 bg job 还是 running 且 pid 死了,refreshJobLiveness 会读 log + writeJobFile,
       // 然后我们再从 jobs/<id>.json 重读完整 payload

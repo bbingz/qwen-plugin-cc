@@ -6,19 +6,18 @@ import process from "node:process";
 import { loadState, resolveStateFile } from "./lib/state.mjs";
 import { resolveWorkspaceRoot } from "./lib/git.mjs";
 import { refreshJobLiveness } from "./lib/job-lifecycle.mjs";
+import { cancelJobPgid } from "./lib/qwen.mjs";
 
-function terminateProcessTree(pid) {
-  if (!Number.isFinite(pid)) {
-    return;
-  }
+// Claude v0.1.1 P1-4:SessionEnd 终止 job 走 cancelJobPgid,而非裸 kill。
+// cancelJobPgid 有 pre-kill probe + `ps -g <pgid>` verify,能识别 pgid 已被
+// OS 回收给无关进程组的情况,避免 session 关闭时误杀。
+async function terminateJob(job) {
+  const target = job.pgid ?? job.pid;
+  if (!Number.isFinite(target)) return;
   try {
-    process.kill(-pid, "SIGTERM");
+    await cancelJobPgid(target, { sleepMs: 500 });
   } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Ignore if process already gone.
-    }
+    // 保底:cancelJobPgid 不该 throw(内部已 catch),兜底忽略
   }
 }
 
@@ -45,7 +44,7 @@ function appendEnvVar(name, value) {
   fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
 }
 
-function cleanupSessionJobs(cwd, sessionId) {
+async function cleanupSessionJobs(cwd, sessionId) {
   if (!cwd || !sessionId) {
     return;
   }
@@ -76,7 +75,7 @@ function cleanupSessionJobs(cwd, sessionId) {
   // sessionJobs 已筛出仅 running 且归本 session 的
   for (const job of sessionJobs) {
     try { refreshJobLiveness(workspaceRoot, job); } catch { /* ignore */ }
-    try { terminateProcessTree(job.pid ?? Number.NaN); } catch { /* ignore */ }
+    await terminateJob(job);
   }
 }
 
@@ -87,7 +86,7 @@ function handleSessionStart(input) {
 
 async function handleSessionEnd(input) {
   const cwd = input.cwd || process.cwd();
-  cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
+  await cleanupSessionJobs(cwd, input.session_id || process.env[SESSION_ID_ENV]);
 }
 
 async function main() {

@@ -123,3 +123,36 @@ test("refreshJobLiveness: 无 pid 原样返回(未知来源)", () => {
     assert.equal(out, job);
   });
 });
+
+test("refreshJobLiveness: 活 pid 但 PID 复用(非 qwen)→ 走 finalize", () => {
+  withTempCwd((cwd) => {
+    ensureStateDir(cwd);
+    const logFile = resolveJobLogFile(cwd, "job-reused");
+    writeStreamLog(logFile, { withResult: true, assistantText: "stale" });
+
+    const job = {
+      jobId: "job-reused",
+      status: "running",
+      pid: process.pid, // 活着,但 verifyFn 说"不是 qwen"
+      logFile,
+    };
+    upsertJob(cwd, job);
+
+    const out = refreshJobLiveness(cwd, job, { verifyFn: () => false });
+    assert.equal(out.status, "completed");
+    assert.equal(out.result, "stale");
+  });
+});
+
+test("refreshJobLiveness: 活 pid + verifyFn 说是 qwen → 保留 running", () => {
+  withTempCwd((cwd) => {
+    const job = {
+      jobId: "job-live-verified",
+      status: "running",
+      pid: process.pid,
+    };
+    const out = refreshJobLiveness(cwd, job, { verifyFn: () => true });
+    assert.equal(out.status, "running");
+    assert.equal(out, job);
+  });
+});

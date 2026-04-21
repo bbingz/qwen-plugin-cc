@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import process from "node:process";
+import { spawnSync } from "node:child_process";
 
 import { parseStreamEvents, detectFailure } from "./qwen.mjs";
 import { writeJobFile, upsertJob } from "./state.mjs";
@@ -33,21 +34,50 @@ function readLogTail(logPath, maxBytes = LOG_TAIL_BYTES) {
 }
 
 /**
+ * 默认 pid 归属验证:`ps -p <pid>` 检查 command 是否 qwen,防 PID 复用假活。
+ * 保守策略:ps 本身失败(platform/race)返 true,避免把真 qwen 误标 failed。
+ */
+function defaultVerifyPidIsQwen(pid) {
+  try {
+    const r = spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
+    if (r.status !== 0) return true; // ps 查不到:保守保留 running
+    return /qwen/i.test(r.stdout);
+  } catch {
+    return true; // platform 不支持 ps:保守保留 running
+  }
+}
+
+/**
  * pid 探活 + 被动 finalize(bg job)。
  *
  * bg child 把 stream-json 写到 logFile;child 死后读 log 解析出 result/sessionId/failure,
  * writeJobFile 落完整负载。没 log 才降级为 orphan。
  *
+ * v0.2 correctness:对齐 cancelJobPgid 的保护。`process.kill(pid, 0)` 成功
+ * 不等于 job 还活着 —— OS 会把 pid 复用给无关进程。额外用 `ps -p <pid>`
+ * 验证 command 含 "qwen",不含则视为 pid 复用,走 finalize。
+ *
  * 被 status / result / SessionEnd hook 共用。
+ *
+ * @param {object} options
+ * @param {(pid: number) => boolean} [options.verifyFn] 自定义 pid 归属验证(测试用)
  */
-export function refreshJobLiveness(cwd, job) {
+export function refreshJobLiveness(cwd, job, { verifyFn } = {}) {
   if (job.status !== "running" || !job.pid) return job;
+
+  let alive;
   try {
     process.kill(job.pid, 0); // 探测,不发信号
-    return job;
+    const verifier = verifyFn ?? defaultVerifyPidIsQwen;
+    alive = verifier(job.pid);
   } catch (e) {
-    if (e.code !== "ESRCH") return job;
+    if (e.code !== "ESRCH") return job; // 非 ESRCH(EPERM 等):保守原样返
+    alive = false;
+  }
 
+  if (alive) return job;
+
+  {
     // bg job 有 log file → 解析(tail-only,防大 log 阻塞)
     if (job.logFile && fs.existsSync(job.logFile)) {
       const logText = readLogTail(job.logFile);

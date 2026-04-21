@@ -1,0 +1,92 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+import { isLikelySecretFile, collectReviewContext } from "../lib/git.mjs";
+
+test("isLikelySecretFile: 典型 secret 文件名匹配", () => {
+  const hits = [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.example",       // 保守拒:让用户主动改名/git-add
+    ".envrc",
+    "credentials",
+    "credentials.json",
+    "credentials.yaml",
+    ".aws/credentials",
+    "foo/bar/.env",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    "id_rsa",
+    "id_ed25519",
+    "server_rsa",
+    "deploy_ed25519",
+    "server.pem",
+    "server.key",
+    "certs/cert.p12",
+    "keystore.jks",
+    "secret.json",
+    "secrets.yaml",
+    ".secret",
+    ".secrets",
+    "vault.kdbx",
+    "old.kdb",
+  ];
+  for (const f of hits) {
+    assert.equal(isLikelySecretFile(f), true, `expected true: ${f}`);
+  }
+});
+
+test("isLikelySecretFile: 普通文件不误判", () => {
+  const misses = [
+    "src/app.ts",
+    "README.md",
+    "config.json",          // 不是 credentials.*
+    "package.json",
+    "env.ts",               // 无前导 .
+    "envelope.md",          // 前缀相同但不是 .env
+    "keymap.ts",            // 不是 .key
+    "public.pub",           // 公钥不拦(保守拒私钥系列)
+  ];
+  for (const f of misses) {
+    assert.equal(isLikelySecretFile(f), false, `expected false: ${f}`);
+  }
+});
+
+test("isLikelySecretFile: 非 string 输入安全", () => {
+  assert.equal(isLikelySecretFile(null), false);
+  assert.equal(isLikelySecretFile(undefined), false);
+  assert.equal(isLikelySecretFile(""), false);
+  assert.equal(isLikelySecretFile(123), false);
+});
+
+test("collectReviewContext: untracked .env 被标 skipped 且内容不出现", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-secret-test-"));
+  try {
+    // 初始化 git + commit 一个占位让 working-tree 模式生效
+    spawnSync("git", ["init", "-q"], { cwd: dir });
+    spawnSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+    spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
+    fs.writeFileSync(path.join(dir, "README.md"), "hi\n");
+    spawnSync("git", ["add", "README.md"], { cwd: dir });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: dir });
+
+    const envContent = "API_KEY=super-secret-xxx-do-not-leak";
+    fs.writeFileSync(path.join(dir, ".env"), envContent);
+    fs.writeFileSync(path.join(dir, "notes.md"), "normal new file content\n");
+
+    const ctx = collectReviewContext(dir, { scope: "working-tree" });
+
+    assert.ok(ctx.content.includes("notes.md"), "正常 untracked 文件仍在");
+    assert.ok(ctx.content.includes("normal new file content"), "正常内容仍在");
+    assert.ok(!ctx.content.includes(envContent), "secret 内容不得出现");
+    assert.ok(ctx.content.includes("likely secret file"), "有 skipped 标注");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

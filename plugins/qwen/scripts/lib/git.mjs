@@ -8,6 +8,30 @@ import { runCommand, runCommandChecked } from "./process.mjs";
 const MAX_UNTRACKED_BYTES = 24 * 1024; // 24KB per untracked file
 const BINARY_EXTENSIONS = /\.(png|jpg|jpeg|gif|ico|webp|bmp|woff|woff2|ttf|eot|otf|pdf|zip|gz|tar|bz2|7z|rar|bin|exe|dll|so|dylib|o|a|pyc|class|wasm|mp3|mp4|wav|avi|mov|mkv)$/i;
 
+// v0.2 security:review diff 里的 untracked 文件会送 qwen upstream。默认过滤
+// 典型 secret 文件名,避免误泄。用户若真要 review,自己 git add 进 staged 后
+// 主动走 staged 路径(会被看见但不是"野生 untracked")。
+const SECRET_FILE_PATTERNS = [
+  /(^|\/)\.env($|\.|\b)/i,              // .env, .env.local, .env.production, .env.example
+  /(^|\/)\.envrc$/i,
+  /(^|\/)credentials(\.[^/]+)?$/i,      // credentials, credentials.json, credentials.yaml
+  /(^|\/)\.aws\/credentials$/i,
+  /(^|\/)\.npmrc$/i,                    // 常含 _authToken
+  /(^|\/)\.pypirc$/i,
+  /(^|\/)\.netrc$/i,
+  /(^|\/)id_(rsa|ed25519|ecdsa|dsa)$/i,
+  /(^|\/)[^/]*_(rsa|ed25519|ecdsa|dsa)$/i,
+  /\.(pem|key|p12|pfx|jks|keystore)$/i,
+  /(^|\/)secrets?(\.[^/]+)?$/i,         // secret, secrets, secret.json, secrets.yaml
+  /(^|\/)\.secrets?$/i,
+  /\.kdbx?$/i,                          // KeePass
+];
+
+export function isLikelySecretFile(filename) {
+  if (!filename || typeof filename !== "string") return false;
+  return SECRET_FILE_PATTERNS.some((re) => re.test(filename));
+}
+
 // ── Helpers ─────────────────────────────────────────────
 
 function git(cwd, args) {
@@ -290,6 +314,10 @@ function formatUntrackedFiles(cwd, files) {
   const parts = [];
   for (const file of files) {
     if (BINARY_EXTENSIONS.test(file)) continue;
+    if (isLikelySecretFile(file)) {
+      parts.push(`### ${file}\n(skipped: likely secret file, excluded from review)`);
+      continue;
+    }
 
     const absPath = path.resolve(cwd, file);
     let stat;
@@ -331,6 +359,7 @@ function getUntrackedFilesDiff(cwd) {
   const parts = [];
   for (const file of files) {
     if (BINARY_EXTENSIONS.test(file)) continue;
+    if (isLikelySecretFile(file)) continue; // v0.2 security:静默跳过 secret,pseudo-diff 无 skipped 槽位
 
     const absPath = path.resolve(cwd || ".", file);
     let stat;

@@ -44,6 +44,24 @@ function appendEnvVar(name, value) {
   fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export ${name}=${shellEscape(value)}\n`, "utf8");
 }
 
+/**
+ * v0.2.1 P1-SEC-4:把 session 归属判断抽成纯函数,独立可测。
+ * 规则:
+ *   - 只处理 queued/running
+ *   - 有 claudeSessionId 的按精确匹配
+ *   - 无 claudeSessionId(legacy 记录)保守返 false,避免跨 CC session 误杀
+ */
+export function filterJobsOwnedBySession(jobs, sessionId) {
+  if (!Array.isArray(jobs)) return [];
+  return jobs.filter((job) => {
+    if (!job) return false;
+    const stillRunning = job.status === "queued" || job.status === "running";
+    if (!stillRunning) return false;
+    if (job.claudeSessionId) return job.claudeSessionId === sessionId;
+    return false;
+  });
+}
+
 async function cleanupSessionJobs(cwd, sessionId) {
   if (!cwd || !sessionId) {
     return;
@@ -56,15 +74,7 @@ async function cleanupSessionJobs(cwd, sessionId) {
   }
 
   const state = loadState(workspaceRoot);
-  // P0-3: 筛 claudeSessionId(job 启动时从 SESSION_ID_ENV 持久化)。
-  // 历史 job 没这字段 → 直接按 cwd slug 命中的全量 running job 都算本 workspace 的
-  // (SessionEnd 关闭当前 CC 会话时一并清)。
-  const sessionJobs = state.jobs.filter((job) => {
-    const stillRunning = job.status === "queued" || job.status === "running";
-    if (!stillRunning) return false;
-    if (job.claudeSessionId) return job.claudeSessionId === sessionId;
-    return true; // 无 claudeSessionId 的历史记录归入本 workspace fallback
-  });
+  const sessionJobs = filterJobsOwnedBySession(state.jobs, sessionId);
   if (sessionJobs.length === 0) {
     return;
   }

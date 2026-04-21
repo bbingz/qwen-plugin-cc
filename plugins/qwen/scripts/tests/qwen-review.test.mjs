@@ -96,3 +96,22 @@ test("reviewWithRetry: 3 轮全败 → schema_violation", async () => {
   assert.equal(r.kind, "schema_violation");
   assert.equal(r.attempts.length, 3);
 });
+
+test("reviewWithRetry: retry 轮 appendSystem 重传 schema(约束力不降级)", async () => {
+  const appendSystems = [];
+  const runQwen = async (prompt) => {
+    appendSystems.push(prompt.appendSystem);
+    return "not json";
+  };
+  await reviewWithRetry({
+    diff: "fake",
+    schemaText: SCHEMA_TEXT,
+    schema: SCHEMA_OBJ,
+    runQwen,
+    validate: simpleValidate,
+  });
+  assert.equal(appendSystems.length, 3, "跑满 3 轮");
+  assert.ok(appendSystems[0] && appendSystems[0].includes(SCHEMA_TEXT), "首轮含 schema");
+  assert.ok(appendSystems[1] && appendSystems[1].includes(SCHEMA_TEXT), "retry 轮 1 也含 schema");
+  assert.ok(appendSystems[2] && appendSystems[2].includes(SCHEMA_TEXT), "retry 轮 2 也含 schema");
+});

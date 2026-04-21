@@ -688,6 +688,17 @@ export function tryLocalRepair(raw) {
 // ── Review prompt 构造(§5.3 v3.1) ──────────────────────────
 
 /**
+ * Review appendSystem 构造(独立于 diff/adversarial,首轮 + retry 轮共用)。
+ */
+export function buildReviewAppendSystem(schemaText) {
+  return `You are a code reviewer. Your output must strictly match this JSON schema:
+
+${schemaText}
+
+Output only the JSON document itself. No prose before or after. No markdown fences.`;
+}
+
+/**
  * 初次 review prompt。塞 schema 到 --append-system-prompt,
  * user prompt 只含 diff 和"output ONLY JSON"指令。
  */
@@ -704,13 +715,7 @@ ${diff}
 
 Output ONLY a JSON object matching the review-output schema. No prose, no code fences.`;
 
-  const appendSystem = `You are a code reviewer. Your output must strictly match this JSON schema:
-
-${schemaText}
-
-Output only the JSON document itself. No prose before or after. No markdown fences.`;
-
-  return { user, appendSystem };
+  return { user, appendSystem: buildReviewAppendSystem(schemaText) };
 }
 
 /**
@@ -805,7 +810,9 @@ export async function reviewWithRetry({
           ajvErrors,
           attemptNumber: i + 1,
         }),
-        appendSystem: null,  // retry 不重塞 schema(已在 user prompt 里)
+        // Qwen v0.14.5 对 --append-system-prompt 遵循度高于 user prompt,
+        // retry 轮若不重塞会降级约束力。
+        appendSystem: buildReviewAppendSystem(schemaText),
       };
     }
   }

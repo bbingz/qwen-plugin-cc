@@ -328,7 +328,11 @@ function runTaskResumeCandidate(rawArgs) {
         latestJobId = task.jobId;
       }
     }
-  } catch { /* 空 state 也算不可用 */ }
+  } catch (e) {
+    // 空 state 算不可用是主用途;真 I/O 错误(perm/corruption)也走同分支,
+    // 但至少 stderr 留痕,便于用户察觉 state 目录异常。
+    try { process.stderr.write(`task-resume-candidate: listJobs failed: ${e.message}\n`); } catch {}
+  }
 
   const payload = { available, latestJobId };
   process.stdout.write(JSON.stringify(payload, null, 2) + "\n");

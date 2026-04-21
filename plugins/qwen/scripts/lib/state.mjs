@@ -349,13 +349,17 @@ export function readTimingHistory() {
     return [];
   }
   const out = [];
+  let corrupted = 0;
   for (const line of content.split("\n")) {
     if (!line.trim()) continue;
     try {
       out.push(JSON.parse(line));
     } catch {
-      // skip corrupted line
+      corrupted += 1;
     }
+  }
+  if (corrupted > 0) {
+    try { process.stderr.write(`[timing] ${corrupted} corrupted line(s) skipped in ${file}\n`); } catch {}
   }
   return out;
 }

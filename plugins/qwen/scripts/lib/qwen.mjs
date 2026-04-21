@@ -839,6 +839,21 @@ export function tryLocalRepair(raw) {
   // 最后兜底:补完后再去一次中段尾逗号。
   try { return JSON.parse(fixed.replace(/,(\s*[}\]])/g, "$1")); } catch {}
 
+  // v0.2.1 P1-COR-1(Claude):qwen timeout 在 `"key":` 冒号后 value 前断,
+  // 例 `{"a":1,"b":` 或 `{"x":[1,{"y":`。Step 5 补闭合后 `{"a":1,"b":}`
+  // 仍 parse 失败(:后必须有 value)。Step 6:砍掉末尾的 `,"key":` 或
+  // `{"key":`,递归重试(tryLocalRepair 会重新走 Step 3-5 补闭合)。
+  const keyColonTail = tail.match(/^(.*?)([,{]\s*"[^"]*"\s*:\s*)$/s);
+  if (keyColonTail) {
+    const truncated = keyColonTail[1].replace(/,\s*$/, "");
+    const reassembled = text.slice(0, firstBrace) + truncated;
+    // 防 recursion 死循环:只有 tail 真的变短才递归。
+    if (reassembled.length < text.length) {
+      const r = tryLocalRepair(reassembled);
+      if (r != null) return r;
+    }
+  }
+
   return null;
 }
 

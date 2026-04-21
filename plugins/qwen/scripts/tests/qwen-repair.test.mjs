@@ -69,6 +69,23 @@ test("tryLocalRepair: truncation 嵌套 object 中", () => {
   assert.deepEqual(r, { a: 1, b: { msg: "cut mid" } });
 });
 
+test("tryLocalRepair: 尾断在 key: 冒号后(v0.2.1 P1-COR-1)", () => {
+  // qwen timeout 常见场景:key 写完冒号了但 value 还没开始吐
+  const r = tryLocalRepair('{"a":1,"b":');
+  assert.deepEqual(r, { a: 1 });
+});
+
+test("tryLocalRepair: 尾断在嵌套 object 的 key: 后", () => {
+  const r = tryLocalRepair('{"x":[1],"y":{"z":');
+  assert.deepEqual(r, { x: [1] });
+});
+
+test("tryLocalRepair: 尾断在 opening `{` 后的 key:", () => {
+  // `{"a":1,"nested":{"k":`  砍 ,"nested":{"k":  后 `{"a":1` 补闭合
+  const r = tryLocalRepair('{"a":1,"nested":{"k":');
+  assert.deepEqual(r, { a: 1 });
+});
+
 test("tryLocalRepair: escaped quote 不被当 string 结束", () => {
   // "x\"y" 内的 \" 是转义,不结束 string;后续 } 也不应误算。
   const r = tryLocalRepair('{"a":"x\\"y}"');

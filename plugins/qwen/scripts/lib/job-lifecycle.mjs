@@ -10,6 +10,23 @@ import { writeJobFile, upsertJob } from "./state.mjs";
 // 按 1MB 尾部读(result event 总是最后一条 JSONL 行),足以让 detectFailure 拿到 resultEvent。
 const LOG_TAIL_BYTES = 1 * 1024 * 1024;
 
+/**
+ * 从 log tail 抽 stderr 尾(非 JSONL 行)。bg spawn 把 stdout/stderr 都定向
+ * 同一 logFile(`stdio = [ignore, fd, fd]`),stream-json 行以 `{` 开头,
+ * stderr / node 崩溃栈则不是。用这个区分抽 detail。
+ */
+export function extractStderrFromLog(logText, maxLines = 20) {
+  if (!logText) return "";
+  const nonJson = [];
+  for (const line of logText.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    if (t.startsWith("{")) continue;
+    nonJson.push(line);
+  }
+  return nonJson.slice(-maxLines).join("\n");
+}
+
 function readLogTail(logPath, maxBytes = LOG_TAIL_BYTES) {
   let fd;
   try {
@@ -87,12 +104,21 @@ export function refreshJobLiveness(cwd, job, { verifyFn } = {}) {
       // 防 crash(exit!=0)但留下部分 assistantTexts 被误判 completed。
       let failure;
       if (!parsed.resultEvent) {
-        failure = { failed: true, kind: "incomplete_stream", message: "child exited without result event (crash or truncated)" };
+        // Claude v0.1.0 P0-4:把 log 尾里的非 JSONL 行当 stderr,填到 failure.detail
+        // 诊断 crash 栈 / node traceback / qwen error 输出。
+        const stderrTail = extractStderrFromLog(logText);
+        failure = {
+          failed: true,
+          kind: "incomplete_stream",
+          message: "child exited without result event (crash or truncated)",
+          detail: stderrTail || null,
+        };
       } else {
         failure = detectFailure({
           exitCode: 0,
           resultEvent: parsed.resultEvent,
           assistantTexts: parsed.assistantTexts,
+          stderr: extractStderrFromLog(logText),
         });
       }
       const updated = {

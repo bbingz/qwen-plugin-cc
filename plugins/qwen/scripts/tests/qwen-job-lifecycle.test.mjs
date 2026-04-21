@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { refreshJobLiveness } from "../lib/job-lifecycle.mjs";
+import { refreshJobLiveness, extractStderrFromLog } from "../lib/job-lifecycle.mjs";
 import { resolveJobLogFile, ensureStateDir, upsertJob, listJobs } from "../lib/state.mjs";
 
 // 每个 test 用独立临时 cwd 隔离 state。
@@ -154,5 +154,53 @@ test("refreshJobLiveness: 活 pid + verifyFn 说是 qwen → 保留 running", ()
     const out = refreshJobLiveness(cwd, job, { verifyFn: () => true });
     assert.equal(out.status, "running");
     assert.equal(out, job);
+  });
+});
+
+test("extractStderrFromLog: 过滤 JSONL 行,保留非 JSON tail", () => {
+  const log = [
+    JSON.stringify({ type: "system", subtype: "init", session_id: "s1" }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } }),
+    "node:internal/process/task_queues:95",
+    "    at process.processTicksAndRejections",
+    "Error: ENOSPC: no space left on device",
+    "",  // 空行
+  ].join("\n");
+  const out = extractStderrFromLog(log);
+  assert.ok(out.includes("Error: ENOSPC"));
+  assert.ok(out.includes("node:internal"));
+  assert.ok(!out.includes('"type"'));
+});
+
+test("extractStderrFromLog: maxLines 截断", () => {
+  const lines = [];
+  for (let i = 0; i < 100; i++) lines.push(`line ${i}`);
+  const out = extractStderrFromLog(lines.join("\n"), 5);
+  const outLines = out.split("\n");
+  assert.equal(outLines.length, 5);
+  assert.equal(outLines[0], "line 95");
+  assert.equal(outLines[4], "line 99");
+});
+
+test("refreshJobLiveness: incomplete_stream 填 failure.detail(stderr tail)", () => {
+  withTempCwd((cwd) => {
+    ensureStateDir(cwd);
+    const logFile = resolveJobLogFile(cwd, "job-crash-detail");
+    // 混合 JSONL + stderr:没有 result event
+    fs.writeFileSync(logFile, [
+      JSON.stringify({ type: "system", subtype: "init", session_id: "s1" }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "partial" }] } }),
+      "Error: connection reset by peer",
+      "    at Socket.emit",
+    ].join("\n"));
+
+    const job = { jobId: "job-crash-detail", status: "running", pid: 999999, logFile };
+    upsertJob(cwd, job);
+
+    const out = refreshJobLiveness(cwd, job);
+    assert.equal(out.status, "failed");
+    assert.equal(out.failure.kind, "incomplete_stream");
+    assert.ok(out.failure.detail, "detail 非空");
+    assert.ok(out.failure.detail.includes("connection reset"));
   });
 });

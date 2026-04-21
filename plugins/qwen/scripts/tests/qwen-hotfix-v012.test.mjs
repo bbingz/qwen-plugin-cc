@@ -101,10 +101,19 @@ test("P0-3: 历史 job 无 claudeSessionId → fallback 包括(兼容老记录)"
   assert.deepEqual(ids, ["new-match", "old"]);
 });
 
-test("P0-3: 无 sessionId 输入 → 全量返回(老 fallback)", () => {
-  const jobs = [{ jobId: "x", claudeSessionId: "cc-1", status: "running" }];
-  const r = filterJobsForCurrentSession(jobs, {});
-  assert.equal(r.length, 1);
+test("P0-3: 无 sessionId 输入 + env 无泄漏 → 全量返回(老 fallback)", () => {
+  // v0.2.1:filterJobsForCurrentSession 会 fallback 到 process.env[SESSION_ID_ENV]。
+  // 测试期间 shell 里可能设了 QWEN_COMPANION_SESSION_ID,显式 unset 保证 fallback
+  // 语义测到。
+  const prev = process.env.QWEN_COMPANION_SESSION_ID;
+  delete process.env.QWEN_COMPANION_SESSION_ID;
+  try {
+    const jobs = [{ jobId: "x", claudeSessionId: "cc-1", status: "running" }];
+    const r = filterJobsForCurrentSession(jobs, {});
+    assert.equal(r.length, 1);
+  } finally {
+    if (prev !== undefined) process.env.QWEN_COMPANION_SESSION_ID = prev;
+  }
 });
 
 // ── P0-4: updateState 耗尽重试 → StateLockTimeoutError(不再走无锁 fallback) ──

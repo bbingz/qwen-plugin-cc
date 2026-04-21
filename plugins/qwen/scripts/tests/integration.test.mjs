@@ -11,7 +11,20 @@ const companionPath = path.resolve(
   "..", "qwen-companion.mjs"
 );
 
-function runCompanion(args, { cwd = process.cwd(), env = process.env, timeout = 30_000 } = {}) {
+// v0.2.1 P1-DX-1(Claude):integration test 默认 env 改白名单,避免开发机
+// shell 里泄漏的 QWEN_COMPANION_SESSION_ID / CLAUDE_PLUGIN_DATA 等污染测试。
+// 以前 `env: process.env` 导致 CI 和 dev 跑结果不一致(CLAUDE.md 里 "clean env"
+// 的告白 workaround),现在测试默认就 clean。
+const ENV_WHITELIST = ["PATH", "HOME", "USER", "TMPDIR", "LANG", "LC_ALL", "NODE_PATH"];
+function cleanEnv() {
+  const out = {};
+  for (const k of ENV_WHITELIST) {
+    if (process.env[k] != null) out[k] = process.env[k];
+  }
+  return out;
+}
+
+function runCompanion(args, { cwd = process.cwd(), env = cleanEnv(), timeout = 30_000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn("node", [companionPath, ...args], { cwd, env });
     let stdout = "", stderr = "";
@@ -27,7 +40,7 @@ function makeTmpPluginData() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-int-"));
   return {
     dir,
-    env: { ...process.env, CLAUDE_PLUGIN_DATA: dir },
+    env: { ...cleanEnv(), CLAUDE_PLUGIN_DATA: dir },
     restore() {
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
     },
@@ -35,12 +48,16 @@ function makeTmpPluginData() {
 }
 
 test("integration: setup --json 返回预期字段", { timeout: 40_000 }, async () => {
-  const r = await runCompanion(["setup", "--json"]);
-  assert.equal(r.code, 0);
-  const json = JSON.parse(r.stdout);
-  for (const k of ["installed", "authenticated", "authMethod", "warnings", "installers"]) {
-    assert.ok(k in json, `missing key: ${k}`);
-  }
+  // v0.2.1:setup 测试也注入 tmp CLAUDE_PLUGIN_DATA,和其他 integration test 对齐。
+  const tmp = makeTmpPluginData();
+  try {
+    const r = await runCompanion(["setup", "--json"], { env: tmp.env });
+    assert.equal(r.code, 0);
+    const json = JSON.parse(r.stdout);
+    for (const k of ["installed", "authenticated", "authMethod", "warnings", "installers"]) {
+      assert.ok(k in json, `missing key: ${k}`);
+    }
+  } finally { tmp.restore(); }
 });
 
 test("integration: task --background 无 --unsafe + 显式 yolo → require_interactive", { timeout: 10_000 }, async () => {

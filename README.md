@@ -2,7 +2,7 @@
 
 Use Qwen Code CLI from Claude Code to review code, delegate tasks, and debug.
 
-**Status**: v0.1.1 released — 7 slash commands, 97 unit + 3 integ tests, 4-way reviewed (Claude + Codex + Gemini + Qwen). See [CHANGELOG.md](./CHANGELOG.md).
+**Status**: v0.1.2 released — 7 slash commands, 113 unit + 3 integ tests, 4-way reviewed (v0.1.0) + 4-way reviewed (v0.1.1) + 5-way reviewed (v0.1.2;Kimi job failed). See [CHANGELOG.md](./CHANGELOG.md).
 
 ## Install
 

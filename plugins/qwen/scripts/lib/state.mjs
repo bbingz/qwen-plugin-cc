@@ -205,12 +205,17 @@ export function upsertJob(workspaceRoot, jobPatch) {
     const idx = patchKey == null
       ? -1
       : state.jobs.findIndex((j) => j.jobId === patchKey);
+    // v0.2.1 P0-6(Gemini):过渡期双写 id 字段,保证用户 rollback 到 v0.1.x
+    // 旧代码(只认 id)仍能读到 v0.2+ 写入的 job。v0.3+ 彻底清理前保留。
+    const withLegacyId = patchKey != null
+      ? { ...jobPatch, id: jobPatch.id ?? patchKey }
+      : jobPatch;
     if (idx >= 0) {
-      state.jobs[idx] = { ...state.jobs[idx], ...jobPatch, updatedAt: now };
+      state.jobs[idx] = { ...state.jobs[idx], ...withLegacyId, updatedAt: now };
     } else {
       state.jobs.push({
-        ...jobPatch,
-        createdAt: jobPatch.createdAt || now,
+        ...withLegacyId,
+        createdAt: withLegacyId.createdAt || now,
         updatedAt: now,
       });
     }

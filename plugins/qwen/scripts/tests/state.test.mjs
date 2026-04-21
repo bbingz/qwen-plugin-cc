@@ -61,6 +61,32 @@ test("writeJobFile + readJobFile roundtrip", () => {
   } finally { tmp.restore(); }
 });
 
+test("upsertJob: 双写 id + jobId(v0.2.1 P0-6 防 rollback)", () => {
+  const tmp = makeTmpPluginData();
+  try {
+    const cwd = "/tmp/dual-write";
+    state.ensureStateDir(cwd);
+    const jobId = randomUUID();
+    state.upsertJob(cwd, { jobId, kind: "task", status: "running" });
+    const jobs = state.listJobs(cwd);
+    const saved = jobs.find((j) => j.jobId === jobId);
+    assert.ok(saved);
+    assert.equal(saved.id, jobId, "legacy id 字段也被写入,供 v0.1.x rollback 读");
+  } finally { tmp.restore(); }
+});
+
+test("upsertJob: jobPatch 显式传 id 不被覆盖", () => {
+  const tmp = makeTmpPluginData();
+  try {
+    const cwd = "/tmp/dual-write-explicit";
+    state.ensureStateDir(cwd);
+    const jobId = randomUUID();
+    state.upsertJob(cwd, { jobId, id: "explicit-legacy-id", kind: "task", status: "running" });
+    const saved = state.listJobs(cwd).find((j) => j.jobId === jobId);
+    assert.equal(saved.id, "explicit-legacy-id", "显式 id 保留");
+  } finally { tmp.restore(); }
+});
+
 test("loadState: legacy { id } → jobId migrate-on-read", () => {
   const tmp = makeTmpPluginData();
   try {

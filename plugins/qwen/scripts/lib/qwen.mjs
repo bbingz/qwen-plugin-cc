@@ -267,6 +267,9 @@ export function parseAssistantContent(blocks) {
  *   model: string | null,
  *   mcpServers: string[],
  *   assistantTexts: string[],
+ *   toolUses: Array<{id: string|null, name: string|null, input: object|null}>,
+ *   toolResults: Array<{tool_use_id: string|null, content: any, is_error: boolean}>,
+ *   imageCount: number,
  *   resultEvent: object | null,
  *   stderrTail: string,
  * }}
@@ -562,7 +565,18 @@ export function spawnQwenProcess({
  * v3.1 / Claude+Gemini P1: SIGTERM 后等 exit,防 job.json fs.renameSync 未完成变 orphan。
  *
  * @param {{ child, background, onAssistantText?, onResultEvent? }} opts
- * @returns {Promise<{ sessionId, model, mcpServers, assistantTexts, resultEvent, apiErrorEarly }>}
+ * @returns {Promise<{
+ *   sessionId: string | null,
+ *   model: string | null,
+ *   mcpServers: string[],
+ *   assistantTexts: string[],
+ *   toolUses: Array<{id: string|null, name: string|null, input: object|null}>,
+ *   toolResults: Array<{tool_use_id: string|null, content: any, is_error: boolean}>,
+ *   imageCount: number,
+ *   resultEvent: object | null,
+ *   apiErrorEarly: boolean,
+ *   stderrTail: string,
+ * }>}
  */
 export async function streamQwenOutput({ child, background, onAssistantText, onResultEvent } = {}) {
   const state = {
@@ -645,7 +659,16 @@ export async function streamQwenOutput({ child, background, onAssistantText, onR
  * v3.1 F-6: 跳过 type==="thinking" 的 content 块。
  *
  * @param {string} text - 完整 stdout JSONL
- * @returns {{ sessionId, model, mcpServers, assistantTexts, resultEvent }}
+ * @returns {{
+ *   sessionId: string | null,
+ *   model: string | null,
+ *   mcpServers: string[],
+ *   assistantTexts: string[],
+ *   toolUses: Array<{id: string|null, name: string|null, input: object|null}>,
+ *   toolResults: Array<{tool_use_id: string|null, content: any, is_error: boolean}>,
+ *   imageCount: number,
+ *   resultEvent: object | null,
+ * }}
  */
 export function parseStreamEvents(text) {
   const out = {

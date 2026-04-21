@@ -12,7 +12,9 @@ test("isLikelySecretFile: 典型 secret 文件名匹配", () => {
     ".env",
     ".env.local",
     ".env.production",
-    ".env.example",       // 保守拒:让用户主动改名/git-add
+    ".env.development",
+    ".env.staging",
+    ".env.prod",
     ".envrc",
     "credentials",
     "credentials.json",
@@ -36,9 +38,33 @@ test("isLikelySecretFile: 典型 secret 文件名匹配", () => {
     ".secrets",
     "vault.kdbx",
     "old.kdb",
+    // v0.2.1 P1-SEC-3:云 CLI 文件
+    ".git-credentials",
+    "azure-credentials",
+    "azure-credentials.json",
+    "azureProfile.json",
+    ".docker/config.json",
+    "gcloud/credentials.db",
+    "terraform.tfstate",
+    "terraform.tfstate.backup",
   ];
   for (const f of hits) {
     assert.equal(isLikelySecretFile(f), true, `expected true: ${f}`);
+  }
+});
+
+test("isLikelySecretFile: .env.example/sample/template 放过(v0.2.1 P1-SEC-2)", () => {
+  // v0.2 保守拒这些,OSS 常见 commit 为占位模板,反直觉。v0.2.1 放过。
+  const misses = [
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    ".env.tmpl",
+    ".env.dist",
+    "foo/.env.example",
+  ];
+  for (const f of misses) {
+    assert.equal(isLikelySecretFile(f), false, `expected false: ${f}`);
   }
 });
 

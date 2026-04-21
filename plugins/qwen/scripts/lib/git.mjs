@@ -8,11 +8,17 @@ import { runCommand, runCommandChecked } from "./process.mjs";
 const MAX_UNTRACKED_BYTES = 24 * 1024; // 24KB per untracked file
 const BINARY_EXTENSIONS = /\.(png|jpg|jpeg|gif|ico|webp|bmp|woff|woff2|ttf|eot|otf|pdf|zip|gz|tar|bz2|7z|rar|bin|exe|dll|so|dylib|o|a|pyc|class|wasm|mp3|mp4|wav|avi|mov|mkv)$/i;
 
-// v0.2 security:review diff 里的 untracked 文件会送 qwen upstream。默认过滤
-// 典型 secret 文件名,避免误泄。用户若真要 review,自己 git add 进 staged 后
-// 主动走 staged 路径(会被看见但不是"野生 untracked")。
+// v0.2 security:review diff 里的文件会送 qwen upstream。默认过滤典型 secret
+// 文件名,避免误泄。v0.2.1 扩充云 CLI + 放过 .env.example/sample/template。
+// 用户若真要 review,自己 git add 进 staged 后主动走 staged 路径(会被看见但
+// 不是"野生 untracked")。
+
+// v0.2.1 P1-SEC-2:Claude 指出 `.env.example` / `.env.sample` / `.env.template`
+// 是 OSS 常见占位模板文件,之前一刀切拒反直觉。只拒真实 variant(含 live secret)。
+const ENV_SECRET_VARIANTS = /(^|\/)\.env(\.(local|production|development|dev|prod|test|staging|[0-9a-z]+\.local))?$/i;
+const ENV_TEMPLATE_SUFFIX = /\.(example|sample|template|tmpl|dist)$/i;
+
 const SECRET_FILE_PATTERNS = [
-  /(^|\/)\.env($|\.|\b)/i,              // .env, .env.local, .env.production, .env.example
   /(^|\/)\.envrc$/i,
   /(^|\/)credentials(\.[^/]+)?$/i,      // credentials, credentials.json, credentials.yaml
   /(^|\/)\.aws\/credentials$/i,
@@ -25,10 +31,25 @@ const SECRET_FILE_PATTERNS = [
   /(^|\/)secrets?(\.[^/]+)?$/i,         // secret, secrets, secret.json, secrets.yaml
   /(^|\/)\.secrets?$/i,
   /\.kdbx?$/i,                          // KeePass
+  // v0.2.1 P1-SEC-3:云 CLI 文件(Qwen review 指出覆盖不全)
+  /(^|\/)\.git-credentials$/i,                // git credential helper
+  /(^|\/)azure-credentials(\.[^/]+)?$/i,      // Azure CLI
+  /(^|\/)azureProfile\.json$/i,
+  /(^|\/)\.docker\/config\.json$/i,           // docker auth
+  /(^|\/)gcloud\/credentials\.db$/i,          // gcloud
+  /(^|\/)terraform\.tfstate(\.backup)?$/i,    // Terraform state(常含 secret)
+  /(^|\/)\.terraform\.lock\.hcl$/i,           // 不太敏感但保守
 ];
 
 export function isLikelySecretFile(filename) {
   if (!filename || typeof filename !== "string") return false;
+  // .env family 特殊处理:.env/.env.local/.env.prod 拒;.env.example/sample/template 放过。
+  if (ENV_SECRET_VARIANTS.test(filename)) return true;
+  if (/\.env\./i.test(filename)) {
+    if (ENV_TEMPLATE_SUFFIX.test(filename)) return false;
+    // .env.XXX 其他 suffix(如 .env.custom):保守拒
+    return true;
+  }
   return SECRET_FILE_PATTERNS.some((re) => re.test(filename));
 }
 

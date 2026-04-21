@@ -367,12 +367,14 @@ async function runCancel(rawArgs) {
     emit({ ok: false, reason: "not_found" }, `Job ${jobId} not found.`, 3);
   }
   if (job.status !== "running") {
-    // Claude v0.1.0 P0-3:已 completed/cancelled/failed/queued 的 job,cancel 是 no-op,
-    // 默认打人类可读文本(exit 0),--json 保留 envelope 供脚本消费。
+    // Claude v0.2 P1-6:v0.2 对已 completed job 用 exit 0 + ok:false,shell
+    // 脚本靠 exit code 分流无法区分 "cancel 成功" vs "已是终态"。v0.2.1 改
+    // exit 4 表达 "no-op on terminal state"(区别于 3=not_found / 5=signal_fail /
+    // 0=cancelled)。JSON envelope 保持 ok:false + reason 不变。
     emit(
       { ok: false, reason: `job is ${job.status}, not running` },
       `Job ${jobId} is already ${job.status}, nothing to cancel.`,
-      0,
+      4,
     );
   }
   if (!job.pgid) {

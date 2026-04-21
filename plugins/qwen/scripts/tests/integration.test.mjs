@@ -98,6 +98,31 @@ test("integration: cancel 不存在 job 默认打 human text + exit 3", { timeou
   }
 });
 
+test("integration: cancel 已 completed job → exit 4(v0.2.1 P1-DX-2)", { timeout: 10_000 }, async () => {
+  const tmp = makeTmpPluginData();
+  try {
+    // 用 setup --enable-review-gate 触发 saveState 创建 slug dir(P0-2 后已走
+    // resolveWorkspaceRoot)。然后改 state.json 注入 completed job。
+    const enableR = await runCompanion(["setup", "--json", "--enable-review-gate"], { env: tmp.env });
+    assert.equal(enableR.code, 0, "setup --enable-review-gate 应成功");
+
+    const stateDir = path.join(tmp.dir, "state");
+    const stateFiles = fs.readdirSync(stateDir);
+    assert.ok(stateFiles.length > 0, "state dir 应有 workspace slug 子目录");
+    const slugDir = path.join(stateDir, stateFiles[0]);
+    const stateJson = path.join(slugDir, "state.json");
+    const state = JSON.parse(fs.readFileSync(stateJson, "utf8"));
+    state.jobs = [{ jobId: "done-123", id: "done-123", status: "completed", kind: "task" }];
+    fs.writeFileSync(stateJson, JSON.stringify(state));
+
+    const r = await runCompanion(["cancel", "done-123"], { env: tmp.env });
+    assert.equal(r.code, 4, "exit 4 表达 no-op on terminal state");
+    assert.match(r.stdout, /already completed/);
+  } finally {
+    tmp.restore();
+  }
+});
+
 test("integration: cancel --json 不存在 job 打 JSON envelope", { timeout: 10_000 }, async () => {
   const tmp = makeTmpPluginData();
   try {

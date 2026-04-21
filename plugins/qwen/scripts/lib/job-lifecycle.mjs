@@ -2,7 +2,7 @@ import fs from "node:fs";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 
-import { parseStreamEvents, detectFailure } from "./qwen.mjs";
+import { parseStreamEvents, detectFailure, normalizePermissionDenials } from "./qwen.mjs";
 import { writeJobFile, upsertJob } from "./state.mjs";
 
 // P0-7: refreshJobLiveness 被 /qwen:status list、/qwen:result、SessionEnd hook 同步调用。
@@ -101,7 +101,7 @@ export function refreshJobLiveness(cwd, job, { verifyFn } = {}) {
         finishedAt: new Date().toISOString(),
         sessionId: parsed.sessionId,
         result: parsed.resultEvent?.result || null,
-        permissionDenials: parsed.resultEvent?.permission_denials ?? [],
+        permissionDenials: normalizePermissionDenials(parsed.resultEvent?.permission_denials),
         failure: failure.failed ? failure : null,
       };
       writeJobFile(cwd, job.jobId, updated);

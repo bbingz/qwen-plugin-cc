@@ -358,6 +358,55 @@ export function classifyApiError(msg) {
   return { failed: true, kind: "api_error_unknown", message: m };
 }
 
+// ── permission_denials 归一化 + redact(Qwen v0.1.1 P0) ─────
+
+const SENSITIVE_KEY_RE = /(api[_-]?key|apikey|token|secret|password|passwd|pwd|credential|auth|bearer|session_id)/i;
+const SECRET_VALUE_PATTERNS = [
+  /^Bearer\s+\S/i,
+  /\bsk-[A-Za-z0-9_-]{20,}/,          // OpenAI
+  /\bghp_[A-Za-z0-9]{20,}/,           // GitHub classic PAT
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/,   // GitHub fine-grained PAT
+  /\bAKIA[0-9A-Z]{16}\b/,             // AWS access key id
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/,   // Slack
+];
+
+function redactInput(input) {
+  if (input == null) return input;
+  if (typeof input === "string") {
+    for (const re of SECRET_VALUE_PATTERNS) if (re.test(input)) return "[REDACTED]";
+    return input;
+  }
+  if (Array.isArray(input)) return input.map(redactInput);
+  if (typeof input === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(input)) {
+      if (SENSITIVE_KEY_RE.test(k)) { out[k] = "[REDACTED]"; continue; }
+      out[k] = redactInput(v);
+    }
+    return out;
+  }
+  return input;
+}
+
+/**
+ * 归一化 qwen stream-json 透传的 permission_denials:
+ * - 丢非 object 条目
+ * - tool_name 必须是 string(缺则 "unknown")
+ * - tool_input 走 redactInput:key 含敏感字眼 → [REDACTED];
+ *   string 值匹配常见 secret pattern(Bearer/sk-/ghp_/AKIA/xox) → [REDACTED]
+ */
+export function normalizePermissionDenials(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const tool_name = typeof entry.tool_name === "string" ? entry.tool_name : "unknown";
+    const tool_input = redactInput(entry.tool_input ?? null);
+    out.push({ tool_name, tool_input });
+  }
+  return out;
+}
+
 // ── detectFailure 五层(§5.1 v3.1) ──────────────────────────
 
 /**

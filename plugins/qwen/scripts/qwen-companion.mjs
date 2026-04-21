@@ -16,6 +16,7 @@ import {
   spawnQwenProcess,
   streamQwenOutput,
   detectFailure,
+  normalizePermissionDenials,
   parseStreamEvents,
   CompanionError,
   cancelJobPgid,
@@ -297,8 +298,8 @@ async function runTask(rawArgs) {
     finishedAt: new Date().toISOString(),
     sessionId: streamResult.sessionId,
     result: streamResult.resultEvent?.result || null,
-    // v3.1 F-4: 透传 permission_denials 给 /qwen:result 高亮
-    permissionDenials: streamResult.resultEvent?.permission_denials ?? [],
+    // v3.1 F-4: 透传 permission_denials 给 /qwen:result 高亮(schema 归一 + redact,Qwen v0.1.1 P0)
+    permissionDenials: normalizePermissionDenials(streamResult.resultEvent?.permission_denials),
     failure: failure.failed ? failure : null,
   };
 

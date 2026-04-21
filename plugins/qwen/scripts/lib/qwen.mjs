@@ -361,16 +361,27 @@ export function classifyApiError(msg) {
   return { failed: true, kind: "api_error_unknown", message: m };
 }
 
-// ── permission_denials 归一化 + redact(Qwen v0.1.1 P0) ─────
+// ── permission_denials 归一化 + redact(Qwen v0.1.1 P0 + v0.2.1 P1-SEC) ─────
 
-const SENSITIVE_KEY_RE = /(api[_-]?key|apikey|token|secret|password|passwd|pwd|credential|auth|bearer|session_id)/i;
+// v0.2.1 P1-SEC:原 `/auth/i` substring 命中 "author"/"authorization"/
+// "authority"/"authentic" 等合法 key 误 redact(Claude v0.2 P1-1)。
+// 加 token delimiter boundary(开头/结尾 或 _-空格),既不漏 "api_key" 也不伤
+// "author"。专门单独保留 `authorization`(Claude review 场景)。
+const SENSITIVE_KEY_RE = /(^|[_\- ])(api[_-]?key|apikey|tokens?|secrets?|passwo?rd|passwd|pwd|credentials?|authorization|bearer|session[_-]?id)([_\- ]|$)/i;
+
 const SECRET_VALUE_PATTERNS = [
-  /^Bearer\s+\S/i,
-  /\bsk-[A-Za-z0-9_-]{20,}/,          // OpenAI
-  /\bghp_[A-Za-z0-9]{20,}/,           // GitHub classic PAT
-  /\bgithub_pat_[A-Za-z0-9_]{20,}/,   // GitHub fine-grained PAT
-  /\bAKIA[0-9A-Z]{16}\b/,             // AWS access key id
-  /\bxox[baprs]-[A-Za-z0-9-]{10,}/,   // Slack
+  // v0.2.1 P1-SEC:原 /^Bearer/ 只匹配行首,HTTP header 里 `Authorization: Bearer xxx`
+  // 或字符串拼接的 curl cmd 中间的 Bearer 漏抓(Claude + MiniMax 双命中)。
+  /(?:^|[\s,;])Bearer\s+[A-Za-z0-9._~+/=-]{10,}/i,
+  /\bsk-[A-Za-z0-9_-]{20,}/,                  // OpenAI
+  /\bsk_live_[A-Za-z0-9]{20,}/,               // Stripe live(v0.2.1 新加)
+  /\bsk_test_[A-Za-z0-9]{20,}/,               // Stripe test
+  /\bghp_[A-Za-z0-9]{20,}/,                   // GitHub classic PAT
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/,           // GitHub fine-grained PAT
+  /\bAKIA[0-9A-Z]{16}\b/,                     // AWS access key id
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/,           // Slack
+  /\bAIza[0-9A-Za-z_-]{35}\b/,                // Google API key(v0.2.1 新加)
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,  // JWT 三段
 ];
 
 function redactInput(input) {

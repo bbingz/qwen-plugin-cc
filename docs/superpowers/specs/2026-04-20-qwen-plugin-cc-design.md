@@ -435,11 +435,12 @@ setup
 $CLAUDE_PLUGIN_DATA/state/<workspace-slug>-<sha256[:16]>/
   ├─ state.json          # { version, config: {stopReviewGate}, jobs: [...] }
   └─ jobs/
-      └─ <jobId>.json    # { jobId, kind, status, phase, pid, pgid, sessionId,
+      └─ <jobId>.json    # { jobId, kind, status, pid, pgid, sessionId, claudeSessionId,
                          #   approvalMode, unsafeFlag,
                          #   startedAt, finishedAt, cwd, prompt,
-                         #   logPath, result, failure, warnings,
+                         #   logFile, result, failure, warnings,
                          #   permissionDenials }   // v3.1: 透传自 resultEvent.permission_denials
+                         //                          (v0.1.2 起经 normalizePermissionDenials redact)
 ```
 
 **jobId 必须是 UUID**(F-7 实测:qwen `--session-id` 强校验 UUID 格式):companion 用 `crypto.randomUUID()` 生成 jobId,直接用作 `--session-id`。

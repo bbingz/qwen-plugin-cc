@@ -361,11 +361,17 @@ export function classifyApiError(msg) {
 // ── detectFailure 五层(§5.1 v3.1) ──────────────────────────
 
 /**
- * 五层判错。qwen "exit 0 + is_error:false 但 assistant text 含 [API Error:" 场景完整翻译。
+ * 六层判错。qwen "exit 0 + is_error:false 但 assistant text 含 [API Error:" 场景完整翻译。
  *
- * @param {{ exitCode: number | null, resultEvent: object | null, assistantTexts: string[] }} input
+ * @param {{ exitCode: number | null, resultEvent: object | null, assistantTexts: string[], stderr?: string }} input
  */
-export function detectFailure({ exitCode, resultEvent, assistantTexts }) {
+export function detectFailure({ exitCode, resultEvent, assistantTexts, stderr }) {
+  // 层 0:F-8 session 找不到(`-c`/`-r` 指向不存在的 session)。qwen 同时 exit!=0,
+  // 但层 1 只返泛 "exit" kind 看不出原因;stderr 匹配则优先给精确分类。
+  if (typeof stderr === "string" && /No saved session found/i.test(stderr)) {
+    return { failed: true, kind: "no_prior_session" };
+  }
+
   // 层 1:进程非 0 退出(null = 未退出,交给 timeout 层处理)
   if (exitCode !== 0 && exitCode !== null)
     return { failed: true, kind: "exit", code: exitCode };
@@ -501,6 +507,7 @@ export async function streamQwenOutput({ child, background, onAssistantText, onR
     assistantTexts: [], toolUses: [], toolResults: [], imageCount: 0,
     resultEvent: null,
     apiErrorEarly: false,
+    stderrTail: "",
     buffer: "",
   };
 
@@ -510,6 +517,14 @@ export async function streamQwenOutput({ child, background, onAssistantText, onR
 
     child.on("error", (e) => { if (!settled) { settled = true; reject(e); } });
     child.on("exit", () => finish());
+
+    // 收 stderr 尾(4KB 窗),detectFailure 用来识别 F-8 no_prior_session。
+    child.stderr?.on?.("data", (chunk) => {
+      state.stderrTail += chunk.toString("utf8");
+      if (state.stderrTail.length > 4096) {
+        state.stderrTail = state.stderrTail.slice(-4096);
+      }
+    });
 
     child.stdout.on("data", (chunk) => {
       state.buffer += chunk.toString("utf8");

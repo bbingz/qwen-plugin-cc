@@ -71,3 +71,43 @@ test("正常成功:exit 0 + is_error false + 有 text → not failed", () => {
   });
   assert.equal(r.failed, false);
 });
+
+test("层 0:stderr 含 /No saved session found/ → no_prior_session(优先于 exit 层)", () => {
+  const r = detectFailure({
+    exitCode: 1,
+    resultEvent: null,
+    assistantTexts: [],
+    stderr: "Error: No saved session found with ID 'abc-123'\n",
+  });
+  assert.equal(r.failed, true);
+  assert.equal(r.kind, "no_prior_session");
+});
+
+test("层 0:不区分大小写(/no saved session FOUND/i)", () => {
+  const r = detectFailure({
+    exitCode: 1,
+    resultEvent: null,
+    assistantTexts: [],
+    stderr: "something:\nNO SAVED SESSION FOUND with ID 'xx'\n",
+  });
+  assert.equal(r.kind, "no_prior_session");
+});
+
+test("层 0:stderr 不匹配 → 走后续层(此处 exit!=0 → exit)", () => {
+  const r = detectFailure({
+    exitCode: 1,
+    resultEvent: null,
+    assistantTexts: [],
+    stderr: "random stderr noise",
+  });
+  assert.equal(r.kind, "exit");
+});
+
+test("层 0:未传 stderr → 走后续层", () => {
+  const r = detectFailure({
+    exitCode: 1,
+    resultEvent: null,
+    assistantTexts: [],
+  });
+  assert.equal(r.kind, "exit");
+});

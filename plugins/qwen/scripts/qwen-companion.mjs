@@ -288,6 +288,7 @@ async function runTask(rawArgs) {
     exitCode,
     resultEvent: streamResult.resultEvent,
     assistantTexts: streamResult.assistantTexts,
+    stderr: streamResult.stderrTail,
   });
 
   const finalMeta = {

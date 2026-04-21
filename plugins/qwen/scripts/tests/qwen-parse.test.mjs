@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseStreamEvents } from "../lib/qwen.mjs";
+import { parseStreamEvents, parseAssistantContent } from "../lib/qwen.mjs";
 
 const NORMAL_JSONL = `
 {"type":"system","subtype":"init","session_id":"abc","model":"qwen3.5-plus","mcp_servers":[]}
@@ -49,4 +49,57 @@ not json at all
 test("parseStreamEvents: F-6 thinking 块被跳过,只收 text", () => {
   const { assistantTexts } = parseStreamEvents(WITH_THINKING_JSONL);
   assert.deepEqual(assistantTexts, ["answer"], "thinking 被过滤,只留 text");
+});
+
+test("parseAssistantContent: text/tool_use/tool_result/image 分别收", () => {
+  const blocks = [
+    { type: "text", text: "calling tool" },
+    { type: "tool_use", id: "t1", name: "bash", input: { cmd: "ls" } },
+    { type: "tool_result", tool_use_id: "t1", content: "file1\nfile2", is_error: false },
+    { type: "image", source: { type: "base64", data: "iVBORw0K..." } },
+    { type: "thinking", thinking: "internal" },  // F-6 跳过
+    { type: "text", text: "done" },
+  ];
+  const r = parseAssistantContent(blocks);
+  assert.deepEqual(r.texts, ["calling tool", "done"]);
+  assert.equal(r.toolUses.length, 1);
+  assert.deepEqual(r.toolUses[0], { id: "t1", name: "bash", input: { cmd: "ls" } });
+  assert.equal(r.toolResults.length, 1);
+  assert.deepEqual(r.toolResults[0], { tool_use_id: "t1", content: "file1\nfile2", is_error: false });
+  assert.equal(r.imageCount, 1);
+});
+
+test("parseAssistantContent: non-array / non-object / null blocks 安全", () => {
+  assert.deepEqual(parseAssistantContent(null), { texts: [], toolUses: [], toolResults: [], imageCount: 0 });
+  assert.deepEqual(parseAssistantContent(undefined), { texts: [], toolUses: [], toolResults: [], imageCount: 0 });
+  assert.deepEqual(parseAssistantContent("string"), { texts: [], toolUses: [], toolResults: [], imageCount: 0 });
+  const r = parseAssistantContent([null, undefined, "bad", { type: "text", text: "ok" }]);
+  assert.deepEqual(r.texts, ["ok"]);
+});
+
+test("parseAssistantContent: tool_result is_error 正确捕获", () => {
+  const blocks = [
+    { type: "tool_result", tool_use_id: "t1", content: "oops", is_error: true },
+  ];
+  const r = parseAssistantContent(blocks);
+  assert.equal(r.toolResults[0].is_error, true);
+});
+
+test("parseStreamEvents: tool_use/tool_result 聚合到顶层字段", () => {
+  const stream = [
+    JSON.stringify({ type: "system", subtype: "init", session_id: "s1" }),
+    JSON.stringify({ type: "assistant", message: { content: [
+      { type: "tool_use", id: "t1", name: "read_file", input: { path: "/etc/hosts" } },
+    ]}}),
+    JSON.stringify({ type: "assistant", message: { content: [
+      { type: "tool_result", tool_use_id: "t1", content: "127.0.0.1 localhost", is_error: false },
+      { type: "text", text: "file read" },
+    ]}}),
+  ].join("\n");
+  const r = parseStreamEvents(stream);
+  assert.equal(r.toolUses.length, 1);
+  assert.equal(r.toolUses[0].name, "read_file");
+  assert.equal(r.toolResults.length, 1);
+  assert.equal(r.toolResults[0].is_error, false);
+  assert.deepEqual(r.assistantTexts, ["file read"]);
 });

@@ -215,6 +215,44 @@ export function detectInstallers() {
 // ── Ping(探活) ─────────────────────────────────────────────
 
 /**
+ * 解析 qwen stream-json 里一条 assistant 消息的 content[]。
+ *
+ * Qwen v0.1.1 P0:以前只收 text,跳过其他。现在也抓 tool_use(audit 用)
+ * 和 tool_result(failure 诊断用);image 只计数防 base64 塞爆 log。
+ * thinking 仍按 F-6 跳过。
+ *
+ * @param {Array<object>} blocks — event.message.content
+ * @returns {{ texts: string[], toolUses: object[], toolResults: object[], imageCount: number }}
+ */
+export function parseAssistantContent(blocks) {
+  const out = { texts: [], toolUses: [], toolResults: [], imageCount: 0 };
+  if (!Array.isArray(blocks)) return out;
+  for (const b of blocks) {
+    if (!b || typeof b !== "object") continue;
+    if (b.type === "text" && typeof b.text === "string") {
+      out.texts.push(b.text);
+    } else if (b.type === "tool_use") {
+      out.toolUses.push({
+        id: b.id ?? null,
+        name: b.name ?? null,
+        input: b.input ?? null,
+      });
+    } else if (b.type === "tool_result") {
+      out.toolResults.push({
+        tool_use_id: b.tool_use_id ?? null,
+        // content 可能是 string 或 blocks array;保留原样,下游自己判
+        content: b.content ?? null,
+        is_error: Boolean(b.is_error),
+      });
+    } else if (b.type === "image") {
+      out.imageCount += 1;
+    }
+    // thinking / 其它未知 type:F-6 跳过
+  }
+  return out;
+}
+
+/**
  * 跑一次 qwen "ping" 的 stream-json,抓 init + assistant + result 事件。
  * 不做判错(判错在 §5.1 detectFailure 统一),只返原料。
  *
@@ -243,6 +281,9 @@ export function runQwenPing({ env, cwd, bin = QWEN_BIN } = {}) {
     model: null,
     mcpServers: [],
     assistantTexts: [],
+    toolUses: [],
+    toolResults: [],
+    imageCount: 0,
     resultEvent: null,
     stderrTail: (result.stderr || "").slice(-500),
   };
@@ -260,13 +301,11 @@ export function runQwenPing({ env, cwd, bin = QWEN_BIN } = {}) {
       out.model = event.model ?? null;
       out.mcpServers = Array.isArray(event.mcp_servers) ? event.mcp_servers : [];
     } else if (event.type === "assistant") {
-      const blocks = event.message?.content ?? [];
-      for (const b of blocks) {
-        // F-6: 只收 text,跳过 thinking 块
-        if (b?.type === "text" && typeof b.text === "string") {
-          out.assistantTexts.push(b.text);
-        }
-      }
+      const parsed = parseAssistantContent(event.message?.content ?? []);
+      out.assistantTexts.push(...parsed.texts);
+      out.toolUses.push(...parsed.toolUses);
+      out.toolResults.push(...parsed.toolResults);
+      out.imageCount += parsed.imageCount;
     } else if (event.type === "result") {
       out.resultEvent = event;
     }
@@ -459,7 +498,8 @@ export function spawnQwenProcess({
 export async function streamQwenOutput({ child, background, onAssistantText, onResultEvent } = {}) {
   const state = {
     sessionId: null, model: null, mcpServers: [],
-    assistantTexts: [], resultEvent: null,
+    assistantTexts: [], toolUses: [], toolResults: [], imageCount: 0,
+    resultEvent: null,
     apiErrorEarly: false,
     buffer: "",
   };
@@ -486,21 +526,21 @@ export async function streamQwenOutput({ child, background, onAssistantText, onR
           state.model = event.model ?? state.model;
           if (Array.isArray(event.mcp_servers)) state.mcpServers = event.mcp_servers;
         } else if (event.type === "assistant") {
-          const blocks = event.message?.content ?? [];
-          for (const b of blocks) {
-            // F-6: 跳过 thinking 块
-            if (b?.type === "text" && typeof b.text === "string") {
-              state.assistantTexts.push(b.text);
-              if (onAssistantText) onAssistantText(b.text);
-              // bg 命中 [API Error: → 早退
-              if (background && /\[API Error:/.test(b.text)) {
-                state.apiErrorEarly = true;
-                try {
-                  if (child.pid) process.kill(-child.pid, "SIGTERM");
-                } catch { /* ESRCH 等无声吞 */ }
-                // 500ms 兜底 resolve,即便 exit 事件还没到
-                setTimeout(finish, 500);
-              }
+          const parsed = parseAssistantContent(event.message?.content ?? []);
+          state.toolUses.push(...parsed.toolUses);
+          state.toolResults.push(...parsed.toolResults);
+          state.imageCount += parsed.imageCount;
+          for (const text of parsed.texts) {
+            state.assistantTexts.push(text);
+            if (onAssistantText) onAssistantText(text);
+            // bg 命中 [API Error: → 早退
+            if (background && /\[API Error:/.test(text)) {
+              state.apiErrorEarly = true;
+              try {
+                if (child.pid) process.kill(-child.pid, "SIGTERM");
+              } catch { /* ESRCH 等无声吞 */ }
+              // 500ms 兜底 resolve,即便 exit 事件还没到
+              setTimeout(finish, 500);
             }
           }
         } else if (event.type === "result") {
@@ -529,6 +569,9 @@ export function parseStreamEvents(text) {
     model: null,
     mcpServers: [],
     assistantTexts: [],
+    toolUses: [],
+    toolResults: [],
+    imageCount: 0,
     resultEvent: null,
   };
 
@@ -543,13 +586,11 @@ export function parseStreamEvents(text) {
       out.model = event.model ?? out.model;
       if (Array.isArray(event.mcp_servers)) out.mcpServers = event.mcp_servers;
     } else if (event.type === "assistant") {
-      const blocks = event.message?.content ?? [];
-      for (const b of blocks) {
-        // F-6: 只收 text,跳过 thinking 块
-        if (b?.type === "text" && typeof b.text === "string") {
-          out.assistantTexts.push(b.text);
-        }
-      }
+      const parsed = parseAssistantContent(event.message?.content ?? []);
+      out.assistantTexts.push(...parsed.texts);
+      out.toolUses.push(...parsed.toolUses);
+      out.toolResults.push(...parsed.toolResults);
+      out.imageCount += parsed.imageCount;
     } else if (event.type === "result") {
       out.resultEvent = event;
     }

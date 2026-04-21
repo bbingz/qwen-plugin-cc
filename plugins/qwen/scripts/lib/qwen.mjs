@@ -576,7 +576,13 @@ export async function streamQwenOutput({ child, background, onAssistantText, onR
 
   return new Promise((resolve, reject) => {
     let settled = false;
-    const finish = () => { if (!settled) { settled = true; resolve(state); } };
+    // v0.2.1 P1-COR-4(Gemini):resolve 前清掉内部游标 buffer,不泄漏给调用方。
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      delete state.buffer;
+      resolve(state);
+    };
 
     child.on("error", (e) => { if (!settled) { settled = true; reject(e); } });
     child.on("exit", () => finish());

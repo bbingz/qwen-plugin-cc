@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Qwen rescue subagent
-argument-hint: '[--background|--wait] [--unsafe] [--resume|--fresh] [--model <model>] [what Qwen should investigate, solve, or continue]'
+argument-hint: '[--background|--wait] [--unsafe] [--resume-last|--fresh] [--model <model>] [what Qwen should investigate, solve, or continue]'
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -21,7 +21,7 @@ $ARGUMENTS
 - Neither → default foreground.
 - `--background` and `--wait` are Claude-side execution controls; do NOT forward to `task` text.
 - `--model`, `--effort`, `--unsafe` are runtime flags; preserve them for forwarded `task` call.
-- `--resume` → don't ask; user chose to continue.
+- `--resume-last` → don't ask; user chose to continue.
 - `--fresh` → don't ask; user chose new.
 - Otherwise check resumable thread:
 
@@ -32,7 +32,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/qwen-companion.mjs" task-resume-candidate --
 - If `available: true`, ask with AskUserQuestion:
   - `Continue current Qwen thread`
   - `Start a new Qwen thread`
-- If user continues → add `--resume`. If new → add `--fresh`.
+- If user continues → add `--resume-last`. If new → add `--fresh`.
 - If `available: false`, don't ask.
 
 ## Operating rules
@@ -43,9 +43,24 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/qwen-companion.mjs" task-resume-candidate --
 - Don't inspect files, monitor progress, poll `/qwen:status`, fetch `/qwen:result`, call `/qwen:cancel`, summarize output, or follow-up work.
 - Leave `--effort` unset unless explicit.
 - Leave model unset unless explicit.
-- Leave `--resume`/`--fresh` in forwarded request; subagent handles routing.
+- Leave `--resume-last`/`--fresh` in forwarded request; subagent handles routing.
 - If companion reports missing or unauthenticated Qwen, stop and tell user `/qwen:setup`.
 - If user did not supply a request, ask what Qwen should investigate or fix.
+
+## Long-running tasks
+
+前台 `/qwen:rescue`(默认或显式 `--wait`)经 `Agent` → Bash → `node companion task`
+一路同步等 qwen 退出。**Claude Code Bash 工具默认 2 分钟后超时**,qwen 还在跑
+也会被 CC 侧 kill 掉,job 标 orphan。
+
+调研/修代码超 2 分钟一律用 `--background`:
+
+```
+/qwen:rescue --background --unsafe "audit all TODO/FIXME in src/ and open tickets"
+```
+
+跑起来后用 `/qwen:status` 轮询,done 了 `/qwen:result <jobId>` 拿全量 stdout +
+permissionDenials。
 
 ## Self-help hints
 

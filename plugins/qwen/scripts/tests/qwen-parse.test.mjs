@@ -77,6 +77,23 @@ test("parseAssistantContent: non-array / non-object / null blocks 安全", () =>
   assert.deepEqual(r.texts, ["ok"]);
 });
 
+test("parseAssistantContent: tool_use fallback tool_input → input(Qwen/MiniMax P0)", () => {
+  const blocks = [
+    { type: "tool_use", id: "t1", name: "bash", tool_input: { cmd: "ls" } },
+  ];
+  const r = parseAssistantContent(blocks);
+  assert.equal(r.toolUses.length, 1);
+  assert.deepEqual(r.toolUses[0].input, { cmd: "ls" });
+});
+
+test("parseAssistantContent: tool_use input 优先于 tool_input(两者并存时)", () => {
+  const blocks = [
+    { type: "tool_use", id: "t1", name: "bash", input: { real: 1 }, tool_input: { bogus: 2 } },
+  ];
+  const r = parseAssistantContent(blocks);
+  assert.deepEqual(r.toolUses[0].input, { real: 1 });
+});
+
 test("parseAssistantContent: tool_result is_error 正确捕获", () => {
   const blocks = [
     { type: "tool_result", tool_use_id: "t1", content: "oops", is_error: true },

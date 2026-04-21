@@ -235,7 +235,10 @@ export function parseAssistantContent(blocks) {
       out.toolUses.push({
         id: b.id ?? null,
         name: b.name ?? null,
-        input: b.input ?? null,
+        // v0.2.1 P0-4:Qwen/MiniMax review 指出 qwen 可能用 `tool_input`
+        // 而非 `input`(Claude Messages API 惯例是 input,但不同 SDK 可能异)。
+        // 加 fallback 防止静默 null。
+        input: b.input ?? b.tool_input ?? null,
       });
     } else if (b.type === "tool_result") {
       out.toolResults.push({

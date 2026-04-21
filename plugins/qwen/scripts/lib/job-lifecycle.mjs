@@ -106,22 +106,36 @@ export function refreshJobLiveness(cwd, job, { verifyFn } = {}) {
       // 安全策略:有 resultEvent 才走 detectFailure;没有视为 incomplete_stream。
       // 防 crash(exit!=0)但留下部分 assistantTexts 被误判 completed。
       let failure;
+      const stderrTail = extractStderrFromLog(logText);
       if (!parsed.resultEvent) {
-        // Claude v0.1.0 P0-4:把 log 尾里的非 JSONL 行当 stderr,填到 failure.detail
-        // 诊断 crash 栈 / node traceback / qwen error 输出。
-        const stderrTail = extractStderrFromLog(logText);
-        failure = {
-          failed: true,
-          kind: "incomplete_stream",
-          message: "child exited without result event (crash or truncated)",
-          detail: stderrTail || null,
-        };
+        // v0.2.1 P1-COR-3(Codex):F-8 no_prior_session 在 bg 路径(-r <不存在>)
+        // 只留 stderr 信号,没有 resultEvent。v0.2 直接走 incomplete_stream,
+        // F-8 被吞。先给 detectFailure 一次机会按 stderr 层 0 分类,未命中再
+        // fallback 到 incomplete_stream。
+        const preFail = detectFailure({
+          exitCode: 0,
+          resultEvent: null,
+          assistantTexts: parsed.assistantTexts,
+          stderr: stderrTail,
+        });
+        if (preFail.failed && preFail.kind !== "empty_output") {
+          failure = preFail;
+        } else {
+          // Claude v0.1.0 P0-4:非 JSONL 行当 stderr,填 failure.detail
+          // 诊断 crash 栈 / node traceback / qwen error 输出。
+          failure = {
+            failed: true,
+            kind: "incomplete_stream",
+            message: "child exited without result event (crash or truncated)",
+            detail: stderrTail || null,
+          };
+        }
       } else {
         failure = detectFailure({
           exitCode: 0,
           resultEvent: parsed.resultEvent,
           assistantTexts: parsed.assistantTexts,
-          stderr: extractStderrFromLog(logText),
+          stderr: stderrTail,
         });
       }
       const updated = {

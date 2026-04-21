@@ -184,6 +184,25 @@ test("extractStderrFromLog: maxLines 截断", () => {
   assert.equal(outLines[4], "line 99");
 });
 
+test("refreshJobLiveness: bg !resultEvent + stderr no_prior_session → 分类为 no_prior_session(v0.2.1 P1-COR-3)", () => {
+  withTempCwd((cwd) => {
+    ensureStateDir(cwd);
+    const logFile = resolveJobLogFile(cwd, "job-no-prior");
+    // qwen `-r <不存在>`:只有 stderr,没 resultEvent,assistant 也可能空
+    fs.writeFileSync(logFile, [
+      JSON.stringify({ type: "system", subtype: "init", session_id: "s" }),
+      "Error: No saved session found with ID '00000000-0000-4000-8000-000000000000'",
+    ].join("\n"));
+
+    const job = { jobId: "job-no-prior", status: "running", pid: 999999, logFile };
+    upsertJob(cwd, job);
+
+    const out = refreshJobLiveness(cwd, job);
+    assert.equal(out.status, "failed");
+    assert.equal(out.failure.kind, "no_prior_session", "F-8 层 0 触发,不再吞成 incomplete_stream");
+  });
+});
+
 test("refreshJobLiveness: incomplete_stream 填 failure.detail(stderr tail)", () => {
   withTempCwd((cwd) => {
     ensureStateDir(cwd);

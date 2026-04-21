@@ -188,12 +188,6 @@ function removeFileIfExists(filePath) {
 
 // ── Job operations ───────────────────────────────────────
 
-export function generateJobId(prefix = "gj") {
-  const ts = Date.now().toString(36);
-  const rand = crypto.randomBytes(3).toString("hex");
-  return `${prefix}-${ts}-${rand}`;
-}
-
 export function upsertJob(workspaceRoot, jobPatch) {
   return updateState(workspaceRoot, (state) => {
     const now = new Date().toISOString();

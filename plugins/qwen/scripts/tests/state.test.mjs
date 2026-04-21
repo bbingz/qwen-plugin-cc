@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import * as state from "../lib/state.mjs";
 
 function makeTmpPluginData() {
@@ -42,7 +43,7 @@ test("writeJobFile + readJobFile roundtrip", () => {
   try {
     const cwd = "/tmp/rt";
     state.ensureStateDir(cwd);
-    const jobId = state.generateJobId();
+    const jobId = randomUUID();
     const jobData = {
       jobId, kind: "task", status: "running",
       pid: 12345, pgid: 12345,
@@ -68,7 +69,7 @@ test("listJobs 最多保留一定数量 + 按时间排序", () => {
     // listJobs 从 state.json 读取，用 upsertJob 写入
     for (let i = 0; i < 5; i++) {
       state.upsertJob(cwd, {
-        id: state.generateJobId(),
+        id: randomUUID(),
         kind: "task", status: "completed",
         startedAt: new Date(Date.now() - (5 - i) * 1000).toISOString(),
       });

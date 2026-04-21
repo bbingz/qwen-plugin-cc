@@ -69,7 +69,9 @@ function runSetup(rawArgs) {
   // v3.1:--enable-review-gate / --disable-review-gate 持久化到 state.json
   if (options["enable-review-gate"] || options["disable-review-gate"]) {
     try {
-      const cwd = process.cwd();
+      // v0.2.1 P0-2:对齐 v0.1.2 cwd 归一约束,子目录跑 /qwen:setup 要写
+      // 到 repo-root state 目录,不然 hook 读不到 review-gate 配置。
+      const cwd = resolveWorkspaceRoot(process.cwd());
       ensureStateDir(cwd);
       const state = loadState(cwd) || {};
       state.config = state.config || {};
@@ -127,8 +129,8 @@ function runSetup(rawArgs) {
     installers,
   };
 
-  // v3.1: 补 stopReviewGate 字段
-  const setupState = loadState(process.cwd());
+  // v3.1: 补 stopReviewGate 字段(v0.2.1 P0-2:resolveWorkspaceRoot 归一)
+  const setupState = loadState(resolveWorkspaceRoot(process.cwd()));
   status.stopReviewGate = setupState?.config?.stopReviewGate === true;
 
   if (options.json) {

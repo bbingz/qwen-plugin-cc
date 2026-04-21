@@ -75,6 +75,35 @@ test("upsertJob: 双写 id + jobId(v0.2.1 P0-6 防 rollback)", () => {
   } finally { tmp.restore(); }
 });
 
+test("cleanupOrphanedFiles: 年轻 orphan 保留,陈旧 orphan 清掉(v0.2.1 P1-COR-2)", () => {
+  const tmp = makeTmpPluginData();
+  try {
+    const cwd = "/tmp/orphan-stale-test";
+    state.ensureStateDir(cwd);
+    // 新建两个 jobs/ 目录下的文件:一个 mtime 新、一个 mtime 旧
+    const jobsDir = state.resolveJobsDir(cwd);
+    fs.mkdirSync(jobsDir, { recursive: true });
+
+    const youngPath = path.join(jobsDir, "young-orphan.json");
+    const oldPath = path.join(jobsDir, "old-orphan.json");
+    fs.writeFileSync(youngPath, "{}");
+    fs.writeFileSync(oldPath, "{}");
+    // 把 oldPath mtime 调到 10 分钟前
+    const tenMinAgo = (Date.now() - 10 * 60 * 1000) / 1000;
+    fs.utimesSync(oldPath, tenMinAgo, tenMinAgo);
+
+    // 触发 saveState 调 cleanupOrphanedFiles(state.jobs 空)
+    state.upsertJob(cwd, {
+      jobId: randomUUID(),
+      kind: "task",
+      status: "running",
+    });
+
+    assert.ok(fs.existsSync(youngPath), "年轻 orphan 保留(防并发 writer 误删)");
+    assert.ok(!fs.existsSync(oldPath), "陈旧 orphan 清掉");
+  } finally { tmp.restore(); }
+});
+
 test("upsertJob: jobPatch 显式传 id 不被覆盖", () => {
   const tmp = makeTmpPluginData();
   try {

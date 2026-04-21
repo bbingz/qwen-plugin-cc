@@ -172,15 +172,30 @@ function pruneJobs(jobs) {
     .slice(0, MAX_JOBS);
 }
 
+// v0.2.1 P1-COR-2(Codex):只清 mtime 陈旧的 orphan,避免并发窗口误删。
+// companion 线程:openSync(logFile) → ... → upsertJob(),这中间如果另一个
+// 进程触发 saveState,cleanupOrphanedFiles 按 state.jobs 快照看不到新 jobId,
+// 会把新建的 .log 文件删掉 → 子进程继续写已解绑 fd,refreshJobLiveness 后续
+// 标 orphan/failed。60s 陈旧门槛:openSync→upsertJob 典型 <1s,60s 绰绰有余;
+// 真正陈旧的 orphan(上次 session 崩留的)仍会被下次 save 时清。
+const ORPHAN_STALE_MS = 60 * 1000;
+
 function cleanupOrphanedFiles(workspaceRoot, jobs) {
   const jobIds = new Set(jobs.map((j) => j.jobId));
   const jobsDir = resolveJobsDir(workspaceRoot);
+  const now = Date.now();
   try {
     for (const file of fs.readdirSync(jobsDir)) {
       const id = file.replace(/\.(json|log)$/, "");
-      if (!jobIds.has(id)) {
-        removeFileIfExists(path.join(jobsDir, file));
-      }
+      if (jobIds.has(id)) continue;
+      const fullPath = path.join(jobsDir, file);
+      try {
+        const st = fs.statSync(fullPath);
+        if (now - st.mtimeMs > ORPHAN_STALE_MS) {
+          removeFileIfExists(fullPath);
+        }
+        // else:年轻 orphan,可能是并发 writer 刚创建还没 upsertJob,留。
+      } catch { /* file gone between readdir 和 statSync */ }
     }
   } catch {
     // jobsDir may not exist yet

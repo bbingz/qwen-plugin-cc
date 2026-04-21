@@ -542,12 +542,14 @@ async function runReview(rawArgs, { adversarial = false } = {}) {
   // 构造 runQwen 闭包
   const userSettings = readQwenSettings();
   const { env } = buildSpawnEnv(userSettings);
-  let sessionId = null;
 
   const runQwen = async (prompt, opts = {}) => {
+    // Codex v0.1.0 P1-2:retry 轮 (useResumeSession=true) 走 `-c` 续上一轮 session,
+    // 让 qwen 还看得到原 diff 和 schema,retry 约束力 + 一致性更强。
     const { args: argsArr } = buildQwenArgs({
       prompt: prompt.user,
       appendSystem: prompt.appendSystem || undefined,
+      resumeLast: opts.useResumeSession === true,
       // v0.1.1 hotfix:review 默认 auto-edit(无 TTY 会 auto-deny shell/write,符合"只读 diff 吐 JSON"的语义)
       // 仅当用户显式 --unsafe 时切 yolo(罕见:需要 qwen 跑 shell 查额外信息时)
       unsafeFlag: options.unsafe === true,
@@ -557,7 +559,6 @@ async function runReview(rawArgs, { adversarial = false } = {}) {
 
     const { child } = spawnQwenProcess({ args: argsArr, env, cwd, background: false });
     const streamResult = await streamQwenOutput({ child, background: false });
-    if (streamResult.sessionId && !sessionId) sessionId = streamResult.sessionId;
 
     // raw 优先 result.result(完整响应),fallback assistant texts join
     return streamResult.resultEvent?.result || streamResult.assistantTexts.join("\n");

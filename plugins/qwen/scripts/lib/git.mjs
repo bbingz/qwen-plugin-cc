@@ -43,6 +43,19 @@ export function getRepoRoot(cwd) {
 }
 
 /**
+ * Resolve workspace root: repo root if inside git repo, else cwd fallback.
+ * Shared by hooks + companion so state dir is consistent across sub-directories.
+ */
+export function resolveWorkspaceRoot(cwd) {
+  try {
+    ensureGitRepository(cwd);
+    return getRepoRoot(cwd) || cwd;
+  } catch {
+    return cwd;
+  }
+}
+
+/**
  * Get current branch name.
  */
 export function getCurrentBranch(cwd) {

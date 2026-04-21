@@ -20,6 +20,7 @@ import {
   CompanionError,
   cancelJobPgid,
   reviewWithRetry,
+  PARENT_SESSION_ENV,
 } from "./lib/qwen.mjs";
 import {
   ensureStateDir,
@@ -35,6 +36,7 @@ import { runCommand } from "./lib/process.mjs";
 import {
   ensureGitRepository,
   collectReviewContext,
+  resolveWorkspaceRoot,
 } from "./lib/git.mjs";
 import { refreshJobLiveness } from "./lib/job-lifecycle.mjs";
 import fs from "node:fs";
@@ -181,13 +183,13 @@ async function runTask(rawArgs) {
   const jobId = randomUUID();
 
   // 构造 qwen args
+  // P0-2: resume-last 时 sessionId 必须 unset,否则 buildQwenArgs 优先选 --session-id 永不发 -c
   let argsBuild;
   try {
     argsBuild = buildQwenArgs({
       prompt,
       resumeLast,
-      resumeId: options["session-id"] ? undefined : undefined,
-      sessionId: options["session-id"] || jobId,  // 把 jobId 直接用作 session-id
+      sessionId: resumeLast ? undefined : (options["session-id"] || jobId),
       unsafeFlag,
       background,
     });
@@ -205,8 +207,12 @@ async function runTask(rawArgs) {
   const userSettings = readQwenSettings();
   const { env, warnings } = buildSpawnEnv(userSettings);
 
-  const cwd = process.cwd();
+  // P0-6: 统一 resolve 到 repo root,让 task/status/result 从任意子目录都一致
+  const cwd = resolveWorkspaceRoot(process.cwd());
   ensureStateDir(cwd);
+
+  // P0-3: 持久化 Claude 侧 session id,让 hooks 能按本会话精准筛 job
+  const claudeSessionId = process.env[PARENT_SESSION_ENV] || null;
 
   // 写 running job
   const jobMeta = {
@@ -216,6 +222,7 @@ async function runTask(rawArgs) {
     startedAt: new Date().toISOString(),
     cwd, prompt,
     warnings,
+    claudeSessionId,
   };
 
   // bg 模式:spawn 前把 stdout/stderr 直接写到 log file(OS fd),
@@ -236,6 +243,28 @@ async function runTask(rawArgs) {
   if (logFd != null) {
     try { fs.closeSync(logFd); } catch { /* ignore */ }
   }
+
+  // P0-5: bg 模式 ENOENT / EACCES 时 child.pid 为 undefined;若不检,僵尸 running job 永远无法恢复。
+  // 同步探测:listen error event 并立即等 1 tick 看 pid 是否产生。
+  if (child.pid == null) {
+    const spawnFailure = await new Promise((resolve) => {
+      let settled = false;
+      child.once("error", (err) => { if (!settled) { settled = true; resolve(err); } });
+      // nextTick fallback:如果没触发 error 也没 pid(极罕见),给个空
+      setImmediate(() => { if (!settled) { settled = true; resolve(new Error("spawn failed with no pid and no error event")); } });
+    });
+    const failedMeta = {
+      ...jobMeta,
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      failure: { kind: "spawn_failed", code: spawnFailure?.code || null, message: spawnFailure?.message || "spawn failed" },
+    };
+    writeJobFile(cwd, jobId, failedMeta);
+    upsertJob(cwd, failedMeta);
+    process.stdout.write(JSON.stringify({ ok: false, kind: "spawn_failed", jobId, message: failedMeta.failure.message }, null, 2) + "\n");
+    process.exit(5);
+  }
+
   jobMeta.pid = child.pid;
   jobMeta.pgid = child.pid; // detached 后 pid === pgid
 
@@ -282,7 +311,7 @@ async function runTask(rawArgs) {
 // task-resume-candidate 子命令 — 供 /qwen:rescue 决策"续/新"
 function runTaskResumeCandidate(rawArgs) {
   const { options } = parseArgs(rawArgs, { booleanOptions: ["json"] });
-  const cwd = process.cwd();
+  const cwd = resolveWorkspaceRoot(process.cwd());
 
   let available = false;
   let latestJobId = null;
@@ -294,7 +323,7 @@ function runTaskResumeCandidate(rawArgs) {
       const age = Date.now() - new Date(ts).getTime();
       if (age < 24 * 3600 * 1000 && !Number.isNaN(age)) {
         available = true;
-        latestJobId = task.jobId;
+        latestJobId = task.jobId ?? task.id;
       }
     }
   } catch { /* 空 state 也算不可用 */ }
@@ -308,7 +337,7 @@ function runTaskResumeCandidate(rawArgs) {
 async function runCancel(rawArgs) {
   const { options, positionals } = parseArgs(rawArgs, { booleanOptions: ["json"] });
   const jobId = positionals[0];
-  const cwd = process.cwd();
+  const cwd = resolveWorkspaceRoot(process.cwd());
 
   if (!jobId) {
     process.stderr.write("cancel: jobId required\n");
@@ -317,7 +346,7 @@ async function runCancel(rawArgs) {
 
   // 从 state.json 找 job
   const jobs = listJobs(cwd) || [];
-  const job = jobs.find(j => j.jobId === jobId);
+  const job = jobs.find(j => (j.jobId ?? j.id) === jobId);
   if (!job) {
     process.stdout.write(JSON.stringify({ ok: false, reason: "not_found", jobId }, null, 2) + "\n");
     process.exit(3);
@@ -358,12 +387,12 @@ async function runStatus(rawArgs) {
     booleanOptions: ["wait", "all", "json"],
     valueOptions: ["timeout-ms"],
   });
-  const cwd = process.cwd();
+  const cwd = resolveWorkspaceRoot(process.cwd());
   const jobId = positionals[0];
 
   if (jobId) {
     const jobs = listJobs(cwd) || [];
-    const job = jobs.find(j => j.jobId === jobId);
+    const job = jobs.find(j => (j.jobId ?? j.id) === jobId);
     if (!job) {
       process.stdout.write(JSON.stringify({ error: "job not found", jobId }, null, 2) + "\n");
       process.exit(3);
@@ -397,7 +426,7 @@ async function runResult(rawArgs) {
     process.exit(2);
   }
 
-  const cwd = process.cwd();
+  const cwd = resolveWorkspaceRoot(process.cwd());
 
   // 优先从 jobs/<id>.json 单文件读(完整 payload 含 result、permissionDenials 等)
   // fallback 到 state.json jobs 数组 + 被动 finalize(bg job 未被 status 刷过时)
@@ -465,7 +494,7 @@ async function runReview(rawArgs, { adversarial = false } = {}) {
     valueOptions: ["base", "scope"],
   });
 
-  const cwd = process.cwd();
+  const cwd = resolveWorkspaceRoot(process.cwd());
   ensureGitRepository(cwd);
 
   // 收集 diff — 注意实际签名: collectReviewContext(cwd, { base, scope })

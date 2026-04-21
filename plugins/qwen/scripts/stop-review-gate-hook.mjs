@@ -11,16 +11,7 @@ import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import { getConfig, listJobs } from "./lib/state.mjs";
 import { sortJobsNewestFirst } from "./lib/job-control.mjs";
 import { SESSION_ID_ENV } from "./lib/job-control.mjs";
-import { ensureGitRepository, getRepoRoot } from "./lib/git.mjs";
-
-function resolveWorkspaceRoot(cwd) {
-  try {
-    ensureGitRepository(cwd);
-    return getRepoRoot(cwd) || cwd;
-  } catch {
-    return cwd;
-  }
-}
+import { resolveWorkspaceRoot } from "./lib/git.mjs";
 
 const STOP_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -46,12 +37,17 @@ function logNote(message) {
   process.stderr.write(`${message}\n`);
 }
 
-function filterJobsForCurrentSession(jobs, input = {}) {
+export function filterJobsForCurrentSession(jobs, input = {}) {
+  // P0-3: job.sessionId 是 qwen 的 UUID,不是 CC session id;用 claudeSessionId 字段
+  // (companion.runTask 启动时从 SESSION_ID_ENV 持久化)。历史 job 无字段走 fallback。
   const sessionId = input.session_id || process.env[SESSION_ID_ENV] || null;
   if (!sessionId) {
     return jobs;
   }
-  return jobs.filter((job) => job.sessionId === sessionId);
+  return jobs.filter((job) => {
+    if (job.claudeSessionId) return job.claudeSessionId === sessionId;
+    return true;
+  });
 }
 
 function buildStopReviewPrompt(input = {}) {
@@ -75,7 +71,7 @@ function buildSetupNote(_cwd) {
   return `Qwen is not set up for the review gate.${detail} Run /qwen:setup.`;
 }
 
-function parseStopReviewOutput(rawOutput) {
+export function parseStopReviewOutput(rawOutput) {
   const text = String(rawOutput ?? "").trim();
   if (!text) {
     return {
@@ -85,16 +81,18 @@ function parseStopReviewOutput(rawOutput) {
     };
   }
 
-  const firstLine = text.split(/\r?\n/, 1)[0].trim();
-  if (firstLine.startsWith("ALLOW:")) {
-    return { ok: true, reason: null };
-  }
-  if (firstLine.startsWith("BLOCK:")) {
-    const reason = firstLine.slice("BLOCK:".length).trim() || text;
-    return {
-      ok: false,
-      reason: `Qwen stop-time review found issues that still need fixes before ending the session: ${reason}`
-    };
+  // P0-1 : 扫全部行找首个 ALLOW:/BLOCK:,避免 qwen preamble("Let me think...")误判
+  const lines = text.split(/\r?\n/);
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.startsWith("ALLOW:")) return { ok: true, reason: null };
+    if (line.startsWith("BLOCK:")) {
+      const reason = line.slice("BLOCK:".length).trim() || text;
+      return {
+        ok: false,
+        reason: `Qwen stop-time review found issues that still need fixes before ending the session: ${reason}`
+      };
+    }
   }
 
   return {
@@ -111,7 +109,8 @@ function runStopReview(cwd, input = {}) {
     ...process.env,
     ...(input.session_id ? { [SESSION_ID_ENV]: input.session_id } : {})
   };
-  const result = spawnSync(process.execPath, [scriptPath, "task", "--json", prompt], {
+  // P0-1: 不再传 --json — task fg 走流式 plain text,hook 直接按 ALLOW:/BLOCK: 解析 stdout。
+  const result = spawnSync(process.execPath, [scriptPath, "task", prompt], {
     cwd,
     env: childEnv,
     encoding: "utf8",
@@ -136,16 +135,7 @@ function runStopReview(cwd, input = {}) {
     };
   }
 
-  try {
-    const payload = JSON.parse(result.stdout);
-    return parseStopReviewOutput(payload?.rawOutput);
-  } catch {
-    return {
-      ok: false,
-      reason:
-        "The stop-time Qwen review task returned invalid JSON. Run /qwen:review --wait manually or bypass the gate."
-    };
-  }
+  return parseStopReviewOutput(result.stdout);
 }
 
 function main() {
@@ -193,10 +183,13 @@ function main() {
   logNote(runningTaskNote);
 }
 
-try {
-  main();
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
-  process.exitCode = 1;
+// 仅作为入口脚本时运行 main(test import 不触发)
+if (process.argv[1] && process.argv[1].endsWith("stop-review-gate-hook.mjs")) {
+  try {
+    main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
+  }
 }

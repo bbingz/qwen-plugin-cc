@@ -4,6 +4,34 @@ import process from "node:process";
 import { parseStreamEvents, detectFailure } from "./qwen.mjs";
 import { writeJobFile, upsertJob } from "./state.mjs";
 
+// P0-7: refreshJobLiveness 被 /qwen:status list、/qwen:result、SessionEnd hook 同步调用。
+// 长 bg job 的 stream-json log 可能 >100MB,全量 readFileSync 会冻住 CC 主进程。
+// 按 1MB 尾部读(result event 总是最后一条 JSONL 行),足以让 detectFailure 拿到 resultEvent。
+const LOG_TAIL_BYTES = 1 * 1024 * 1024;
+
+function readLogTail(logPath, maxBytes = LOG_TAIL_BYTES) {
+  let fd;
+  try {
+    const { size } = fs.statSync(logPath);
+    fd = fs.openSync(logPath, "r");
+    if (size <= maxBytes) {
+      const buf = Buffer.alloc(size);
+      fs.readSync(fd, buf, 0, size, 0);
+      return buf.toString("utf8");
+    }
+    const buf = Buffer.alloc(maxBytes);
+    fs.readSync(fd, buf, 0, maxBytes, size - maxBytes);
+    // 首行可能被截半,去掉
+    const text = buf.toString("utf8");
+    const firstNl = text.indexOf("\n");
+    return firstNl >= 0 ? text.slice(firstNl + 1) : text;
+  } catch {
+    return "";
+  } finally {
+    if (fd != null) { try { fs.closeSync(fd); } catch { /* ignore */ } }
+  }
+}
+
 /**
  * pid 探活 + 被动 finalize(bg job)。
  *
@@ -20,10 +48,9 @@ export function refreshJobLiveness(cwd, job) {
   } catch (e) {
     if (e.code !== "ESRCH") return job;
 
-    // bg job 有 log file → 解析
+    // bg job 有 log file → 解析(tail-only,防大 log 阻塞)
     if (job.logFile && fs.existsSync(job.logFile)) {
-      let logText = "";
-      try { logText = fs.readFileSync(job.logFile, "utf8"); } catch { /* ignore */ }
+      const logText = readLogTail(job.logFile);
       const parsed = parseStreamEvents(logText);
       // 真实 exitCode 未知(child 已退出,ESRCH 探不到)。detectFailure 无法走 Layer 1。
       // 安全策略:有 resultEvent 才走 detectFailure;没有视为 incomplete_stream。

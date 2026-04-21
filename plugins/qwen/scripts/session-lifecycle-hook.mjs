@@ -4,7 +4,7 @@ import fs from "node:fs";
 import process from "node:process";
 
 import { loadState, resolveStateFile } from "./lib/state.mjs";
-import { ensureGitRepository, getRepoRoot } from "./lib/git.mjs";
+import { resolveWorkspaceRoot } from "./lib/git.mjs";
 import { refreshJobLiveness } from "./lib/job-lifecycle.mjs";
 
 function terminateProcessTree(pid) {
@@ -25,15 +25,6 @@ function terminateProcessTree(pid) {
 import { SESSION_ID_ENV } from "./lib/job-control.mjs";
 
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
-
-function resolveWorkspaceRoot(cwd) {
-  try {
-    ensureGitRepository(cwd);
-    return getRepoRoot(cwd) || cwd;
-  } catch {
-    return cwd;
-  }
-}
 
 function readHookInput() {
   const raw = fs.readFileSync(0, "utf8").trim();
@@ -66,19 +57,24 @@ function cleanupSessionJobs(cwd, sessionId) {
   }
 
   const state = loadState(workspaceRoot);
-  const sessionJobs = state.jobs.filter((job) => job.sessionId === sessionId);
+  // P0-3: 筛 claudeSessionId(job 启动时从 SESSION_ID_ENV 持久化)。
+  // 历史 job 没这字段 → 直接按 cwd slug 命中的全量 running job 都算本 workspace 的
+  // (SessionEnd 关闭当前 CC 会话时一并清)。
+  const sessionJobs = state.jobs.filter((job) => {
+    const stillRunning = job.status === "queued" || job.status === "running";
+    if (!stillRunning) return false;
+    if (job.claudeSessionId) return job.claudeSessionId === sessionId;
+    return true; // 无 claudeSessionId 的历史记录归入本 workspace fallback
+  });
   if (sessionJobs.length === 0) {
     return;
   }
 
-  // SessionEnd 策略(修正后):
-  // - still-running bg job:先 refreshJobLiveness 读 log 落 jobs/<id>.json,再 kill process
-  // - 已完成的 job:原样保留(让用户下次会话仍可 /qwen:result 查)
-  // - state.json 记录保留(不 filter session jobs);否则 saveState 会触发
-  //   cleanupOrphanedFiles 把刚 finalize 的文件又删了
+  // SessionEnd 策略:
+  // - 本 CC session 的 running job:先 refreshJobLiveness 读 log 落 jobs/<id>.json,再 kill
+  // - 已完成的 job:原样保留(下次会话仍可 /qwen:result 查)
+  // sessionJobs 已筛出仅 running 且归本 session 的
   for (const job of sessionJobs) {
-    const stillRunning = job.status === "queued" || job.status === "running";
-    if (!stillRunning) continue;
     try { refreshJobLiveness(workspaceRoot, job); } catch { /* ignore */ }
     try { terminateProcessTree(job.pid ?? Number.NaN); } catch { /* ignore */ }
   }
@@ -108,7 +104,12 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? (error.stack || error.message) : String(error)}\n`);
-  process.exit(1);
-});
+// 仅作为入口脚本时运行 main(test import 不触发)
+if (process.argv[1] && process.argv[1].endsWith("session-lifecycle-hook.mjs")) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? (error.stack || error.message) : String(error)}\n`);
+    process.exit(1);
+  });
+}
+
+export { cleanupSessionJobs };

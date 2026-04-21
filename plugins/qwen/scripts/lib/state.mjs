@@ -96,10 +96,20 @@ export function saveState(workspaceRoot, state) {
   state.jobs = pruneJobs(state.jobs);
   // Remove orphaned job files
   cleanupOrphanedFiles(workspaceRoot, state.jobs);
-  fs.writeFileSync(
-    resolveStateFile(workspaceRoot),
-    JSON.stringify(state, null, 2) + "\n"
-  );
+  // P0-4: temp-file + rename 原子写,防 partial-write 被并发 loader 读到半截
+  const finalPath = resolveStateFile(workspaceRoot);
+  const tmpPath = finalPath + ".tmp." + process.pid;
+  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2) + "\n");
+  fs.renameSync(tmpPath, finalPath);
+}
+
+export class StateLockTimeoutError extends Error {
+  constructor(workspaceRoot, attempts) {
+    super(`state.json lock acquisition timed out after ${attempts} attempts for workspace ${workspaceRoot}`);
+    this.code = "ESTATELOCK";
+    this.workspaceRoot = workspaceRoot;
+    this.attempts = attempts;
+  }
 }
 
 export function updateState(workspaceRoot, mutate) {
@@ -141,11 +151,9 @@ export function updateState(workspaceRoot, mutate) {
     }
   }
 
-  // Fallback: proceed without lock after exhausting retries
-  const state = loadState(workspaceRoot);
-  mutate(state);
-  saveState(workspaceRoot, state);
-  return state;
+  // P0-4: 耗尽重试后**报错**,不再走 fallback 无锁路径 —
+  // 无锁 read-modify-write + cleanupOrphanedFiles 会把并发进程刚写的 job.json 当孤儿删。
+  throw new StateLockTimeoutError(workspaceRoot, maxRetries);
 }
 
 function pruneJobs(jobs) {

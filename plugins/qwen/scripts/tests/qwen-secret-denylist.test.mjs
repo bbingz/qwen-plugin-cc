@@ -90,3 +90,58 @@ test("collectReviewContext: untracked .env 被标 skipped 且内容不出现", (
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("collectReviewContext: staged .env 也被 exclude,内容不得出现", () => {
+  // v0.2.1 P0-3:Claude review 指出 isLikelySecretFile 只守 untracked,
+  // 用户 `git add .env` 后 staged diff 会把 .env 内容原样送 qwen。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-staged-secret-"));
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: dir });
+    spawnSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+    spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
+    fs.writeFileSync(path.join(dir, "README.md"), "hi\n");
+    spawnSync("git", ["add", "README.md"], { cwd: dir });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: dir });
+
+    const envSecret = "DATABASE_PASSWORD=prod-leaked-pwd-12345";
+    fs.writeFileSync(path.join(dir, ".env"), envSecret);
+    fs.writeFileSync(path.join(dir, "code.ts"), "export const x = 1;\n");
+    spawnSync("git", ["add", ".env", "code.ts"], { cwd: dir });
+
+    const ctx = collectReviewContext(dir, { scope: "staged" });
+
+    assert.ok(ctx.content.includes("code.ts"), "正常 staged 文件仍在 diff 里");
+    assert.ok(ctx.content.includes("export const x"), "正常 staged 内容仍在");
+    assert.ok(!ctx.content.includes(envSecret), "staged secret 内容不得出现");
+    assert.ok(ctx.content.includes("skipped 1 likely-secret file"), "有 staged skip 标注");
+    assert.ok(ctx.content.includes("- .env"), "skip 列表含 .env");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("collectReviewContext: unstaged 修改 credentials.json 也被 exclude", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qwen-unstaged-secret-"));
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: dir });
+    spawnSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+    spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
+    fs.writeFileSync(path.join(dir, "credentials.json"), '{"key":"old"}\n');
+    fs.writeFileSync(path.join(dir, "app.ts"), "const y = 2;\n");
+    spawnSync("git", ["add", "-A"], { cwd: dir });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: dir });
+
+    // 修改两者,让 unstaged diff 非空
+    const leaked = '{"key":"prod-abcdefg-leaked"}';
+    fs.writeFileSync(path.join(dir, "credentials.json"), leaked);
+    fs.writeFileSync(path.join(dir, "app.ts"), "const y = 99;\n");
+
+    const ctx = collectReviewContext(dir, { scope: "unstaged" });
+
+    assert.ok(ctx.content.includes("app.ts"), "正常 unstaged 文件仍在");
+    assert.ok(!ctx.content.includes("prod-abcdefg-leaked"), "secret 不得出现");
+    assert.ok(ctx.content.includes("skipped 1 likely-secret file"), "有 unstaged skip 标注");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

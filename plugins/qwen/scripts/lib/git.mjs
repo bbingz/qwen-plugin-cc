@@ -262,18 +262,41 @@ export function collectReviewContext(cwd, { base, scope = "auto" } = {}) {
   };
 }
 
+// v0.2.1 P0-3:把 file list 拆成 safe + secrets 两堆,secret 文件通过
+// git pathspec exclude 从 diff 里剔除。review 不再把 staged/unstaged 的
+// secret 文件内容裸透给 qwen upstream。
+function partitionSecretFiles(files) {
+  const safe = [];
+  const secrets = [];
+  for (const f of files) {
+    if (isLikelySecretFile(f)) secrets.push(f);
+    else safe.push(f);
+  }
+  return { safe, secrets };
+}
+
+function formatSecretSkipNote(label, secrets) {
+  if (!secrets.length) return "";
+  const lines = secrets.map((f) => `- ${f}`);
+  return `\n(skipped ${secrets.length} likely-secret file(s) from ${label}; names-only, contents not sent)\n${lines.join("\n")}\n`;
+}
+
 function collectWorkingTreeContext(cwd, state, scope) {
   const status = gitChecked(cwd, ["status", "--short"]).stdout.trim();
   const parts = [formatSection("Git Status", status)];
 
   if (scope !== "unstaged") {
-    const stagedDiff = git(cwd, ["diff", "--cached", "--no-ext-diff"]).stdout || "";
-    parts.push(formatSection("Staged Diff", stagedDiff));
+    const { secrets } = partitionSecretFiles(state.staged);
+    const excludeArgs = secrets.map((f) => `:(exclude)${f}`);
+    const stagedDiff = git(cwd, ["diff", "--cached", "--no-ext-diff", "--", ".", ...excludeArgs]).stdout || "";
+    parts.push(formatSection("Staged Diff", stagedDiff + formatSecretSkipNote("staged", secrets)));
   }
 
   if (scope !== "staged") {
-    const unstagedDiff = git(cwd, ["diff", "--no-ext-diff"]).stdout || "";
-    parts.push(formatSection("Unstaged Diff", unstagedDiff));
+    const { secrets } = partitionSecretFiles(state.unstaged);
+    const excludeArgs = secrets.map((f) => `:(exclude)${f}`);
+    const unstagedDiff = git(cwd, ["diff", "--no-ext-diff", "--", ".", ...excludeArgs]).stdout || "";
+    parts.push(formatSection("Unstaged Diff", unstagedDiff + formatSecretSkipNote("unstaged", secrets)));
   }
 
   if (scope !== "staged" && scope !== "unstaged") {

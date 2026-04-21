@@ -129,3 +129,20 @@ test("filterEnvForChild: 用户自定义 QWEN_PLUGIN_ENV_ALLOW 白名单扩展",
   assert.equal(out.OTHER, "world");
   assert.equal(out.STILL_BLOCKED, undefined);
 });
+
+test("filterEnvForChild: NODE_OPTIONS 默认被拦(防 preload 注入)", () => {
+  const out = filterEnvForChild({
+    NODE_OPTIONS: "--require /tmp/evil.js",
+    PATH: "/usr/bin",
+  });
+  assert.equal(out.NODE_OPTIONS, undefined, "NODE_OPTIONS 不能默认透传");
+  assert.equal(out.PATH, "/usr/bin");
+});
+
+test("filterEnvForChild: 用户显式 QWEN_PLUGIN_ENV_ALLOW=NODE_OPTIONS 才放行", () => {
+  const out = filterEnvForChild({
+    QWEN_PLUGIN_ENV_ALLOW: "NODE_OPTIONS",
+    NODE_OPTIONS: "--max-old-space-size=4096",
+  });
+  assert.equal(out.NODE_OPTIONS, "--max-old-space-size=4096");
+});

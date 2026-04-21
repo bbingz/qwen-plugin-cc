@@ -27,8 +27,9 @@ const ENV_ALLOW_EXACT = new Set([
   // 基础
   "PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE",
   "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "TMPDIR", "TZ", "PWD", "LOGNAME",
-  // Node
-  "NODE_PATH", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
+  // Node(NODE_OPTIONS 可注入 --require/--import 预加载 JS,攻击面大:
+  // 移出默认白名单,用户需要自己 QWEN_PLUGIN_ENV_ALLOW="NODE_OPTIONS" 放行)
+  "NODE_PATH", "NODE_EXTRA_CA_CERTS",
   // Proxy 四键 + NO_PROXY(buildSpawnEnv 会单独处理,但也允许直接透传)
   "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy",
   // Claude Code 插件数据目录(state.mjs 依赖)

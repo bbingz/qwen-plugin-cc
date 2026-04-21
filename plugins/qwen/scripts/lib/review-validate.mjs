@@ -71,8 +71,11 @@ function validateNode(data, schema, path, errors) {
         }
       }
     }
-    if (schema.additionalProperties === false && schema.properties) {
-      const allowed = new Set(Object.keys(schema.properties));
+    // v0.2.1 P0-5:若 schema 仅声明 additionalProperties:false 没写 properties
+    // (纯禁止未知字段),v0.2 版本会整段跳过 → 任意额外属性放行。
+    // 改:只看 additionalProperties,allowed 源自 properties ?? {}。
+    if (schema.additionalProperties === false) {
+      const allowed = new Set(Object.keys(schema.properties ?? {}));
       for (const k of Object.keys(data)) {
         if (!allowed.has(k)) {
           push(errors, `${path}/${k}`, `additional property not allowed`);

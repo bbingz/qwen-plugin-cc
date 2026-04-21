@@ -135,6 +135,16 @@ test("validateReviewOutput: 根非 object → 报错", () => {
   assert.ok(Array.isArray(e) && e.length > 0);
 });
 
+test("validateReviewOutput: additionalProperties:false 无 properties 时仍拦截(MiniMax P0)", () => {
+  const strictEmpty = { type: "object", additionalProperties: false };
+  // 无 properties 的 strict schema 应拒任何字段
+  const e = validateReviewOutput({ anything: 1 }, strictEmpty);
+  assert.ok(Array.isArray(e) && e.length > 0, "应报错");
+  assert.ok(e.some((x) => x.instancePath.includes("/anything")), "报 /anything");
+  // 空对象应过
+  assert.equal(validateReviewOutput({}, strictEmpty), null);
+});
+
 test("validateReviewOutput: 多个错误同时报出(不短路)", () => {
   const v = {
     verdict: "bogus",

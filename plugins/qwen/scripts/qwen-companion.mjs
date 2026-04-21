@@ -340,6 +340,13 @@ async function runCancel(rawArgs) {
   const { options, positionals } = parseArgs(rawArgs, { booleanOptions: ["json"] });
   const jobId = positionals[0];
   const cwd = resolveWorkspaceRoot(process.cwd());
+  const jsonMode = options.json === true;
+
+  const emit = (payload, humanText, exitCode) => {
+    if (jsonMode) process.stdout.write(JSON.stringify({ ...payload, jobId }, null, 2) + "\n");
+    else process.stdout.write(humanText + "\n");
+    process.exit(exitCode);
+  };
 
   if (!jobId) {
     process.stderr.write("cancel: jobId required\n");
@@ -350,16 +357,19 @@ async function runCancel(rawArgs) {
   const jobs = listJobs(cwd) || [];
   const job = jobs.find(j => (j.jobId ?? j.id) === jobId);
   if (!job) {
-    process.stdout.write(JSON.stringify({ ok: false, reason: "not_found", jobId }, null, 2) + "\n");
-    process.exit(3);
+    emit({ ok: false, reason: "not_found" }, `Job ${jobId} not found.`, 3);
   }
   if (job.status !== "running") {
-    process.stdout.write(JSON.stringify({ ok: false, reason: `job is ${job.status}, not running`, jobId }, null, 2) + "\n");
-    process.exit(0);
+    // Claude v0.1.0 P0-3:已 completed/cancelled/failed/queued 的 job,cancel 是 no-op,
+    // 默认打人类可读文本(exit 0),--json 保留 envelope 供脚本消费。
+    emit(
+      { ok: false, reason: `job is ${job.status}, not running` },
+      `Job ${jobId} is already ${job.status}, nothing to cancel.`,
+      0,
+    );
   }
   if (!job.pgid) {
-    process.stdout.write(JSON.stringify({ ok: false, reason: "no pgid recorded", jobId }, null, 2) + "\n");
-    process.exit(3);
+    emit({ ok: false, reason: "no pgid recorded" }, `Job ${jobId} has no pgid recorded (cannot cancel).`, 3);
   }
 
   // 发信号
@@ -368,8 +378,7 @@ async function runCancel(rawArgs) {
   if (r.ok) {
     const updated = { ...job, status: "cancelled", finishedAt: new Date().toISOString() };
     upsertJob(cwd, updated);
-    process.stdout.write(`Cancelled ${jobId}\n`);
-    process.exit(0);
+    emit({ ok: true }, `Cancelled ${jobId}`, 0);
   } else {
     const updated = {
       ...job,
@@ -378,8 +387,11 @@ async function runCancel(rawArgs) {
       finishedAt: new Date().toISOString(),
     };
     upsertJob(cwd, updated);
-    process.stdout.write(JSON.stringify({ ok: false, kind: r.kind, message: r.message, jobId }, null, 2) + "\n");
-    process.exit(5);
+    emit(
+      { ok: false, kind: r.kind, message: r.message },
+      `Failed to cancel ${jobId}: ${r.kind} — ${r.message}`,
+      5,
+    );
   }
 }
 

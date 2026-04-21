@@ -67,3 +67,30 @@ test("integration: status 空 state 返空列表(不 crash)", { timeout: 10_000 
     tmp.restore();
   }
 });
+
+test("integration: cancel 不存在 job 默认打 human text + exit 3", { timeout: 10_000 }, async () => {
+  const tmp = makeTmpPluginData();
+  try {
+    const r = await runCompanion(["cancel", "nope-123"], { env: tmp.env });
+    assert.equal(r.code, 3);
+    assert.match(r.stdout, /Job nope-123 not found\./);
+    // 不应是 JSON
+    assert.doesNotMatch(r.stdout.trim(), /^\{/);
+  } finally {
+    tmp.restore();
+  }
+});
+
+test("integration: cancel --json 不存在 job 打 JSON envelope", { timeout: 10_000 }, async () => {
+  const tmp = makeTmpPluginData();
+  try {
+    const r = await runCompanion(["cancel", "--json", "nope-456"], { env: tmp.env });
+    assert.equal(r.code, 3);
+    const json = JSON.parse(r.stdout);
+    assert.equal(json.ok, false);
+    assert.equal(json.reason, "not_found");
+    assert.equal(json.jobId, "nope-456");
+  } finally {
+    tmp.restore();
+  }
+});

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.2 (alignment, unreleased)
+## 0.2.2
 
 - 新增 `/qwen:ask` 命令:薄前台 one-shot ask,直接路由到 companion `task`,不新增 router case
 - 新增 Phase 0 `case-14` probe,确认 qwen `result` event 只有 `usage.*`,没有 `stats` / `stats.models`

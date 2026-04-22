@@ -152,3 +152,9 @@ test("listJobs 最多保留一定数量 + 按时间排序", () => {
     assert.ok(Array.isArray(jobs), "returns array");
   } finally { tmp.restore(); }
 });
+
+test("state module no longer exports timing history helpers in v0.2.2 alignment", () => {
+  assert.equal("appendTimingHistory" in state, false);
+  assert.equal("readTimingHistory" in state, false);
+  assert.equal("resolveTimingHistoryFile" in state, false);
+});

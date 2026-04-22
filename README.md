@@ -2,7 +2,7 @@
 
 Use Qwen Code CLI from Claude Code to review code, delegate tasks, and debug.
 
-**Status**: v0.1.2 released — 7 slash commands, 113 unit + 3 integ tests, 4-way reviewed (v0.1.0) + 4-way reviewed (v0.1.1) + 5-way reviewed (v0.1.2;Kimi job failed). See [CHANGELOG.md](./CHANGELOG.md).
+**Status**: v0.1.2 released; v0.2.2 alignment in progress — 8 slash commands in workspace, 113 unit + 3 integ tests at v0.1.2 baseline. See [CHANGELOG.md](./CHANGELOG.md).
 
 ## Install
 
@@ -45,11 +45,12 @@ Job logs live under `$CLAUDE_PLUGIN_DATA/state/<workspace-slug>/jobs/` (Claude C
 - Authenticated:`qwen auth coding-plan` (Alibaba Cloud) or `--auth-type openai` with API key
 - Recommended:`chatRecording: true` in `~/.qwen/settings.json`(for `--resume` to work)
 
-## Commands(v0.1 scope)
+## Commands(current workspace)
 
 | Command | Status | Purpose |
 |---|---|---|
 | [`/qwen:setup`](plugins/qwen/commands/setup.md) | ✅ Phase 1 | Verify installation + auth + proxy + hooks |
+| [`/qwen:ask`](plugins/qwen/commands/ask.md) | ✅ v0.2.2 alignment | One-shot foreground ask routed to companion `task` |
 | [`/qwen:rescue`](plugins/qwen/commands/rescue.md) | ✅ Phase 2 | Delegate a task to Qwen(`--background --unsafe` for yolo bg) |
 | [`/qwen:review`](plugins/qwen/commands/review.md) | ✅ Phase 3 | Code review against git diff |
 | [`/qwen:adversarial-review`](plugins/qwen/commands/adversarial-review.md) | ✅ Phase 3 | Design-level challenge review |
@@ -78,7 +79,9 @@ The plugin follows the openai-codex plugin template skeleton:
   - `scripts/lib/qwen.mjs` — written from scratch; 18 exported functions including `classifyApiError`, `detectFailure` (5-layer), `parseStreamEvents`, `buildQwenArgs`, `spawnQwenProcess`, `streamQwenOutput`, `cancelJobPgid`, `tryLocalRepair`, `reviewWithRetry`
   - `scripts/qwen-companion.mjs` — CLI dispatcher for all subcommands
 
-16 real-world behavioral differences from gemini: see [`doc/probe/FINDINGS.md`](doc/probe/FINDINGS.md).
+Current alignment note: Phase 0 `case-14` confirmed Qwen `result` events expose `usage.*` but no `stats` / `stats.models`, so v0.2.2 removes inherited timing dead code instead of shipping a partial timing feature.
+
+18 real-world findings and alignment notes: see [`doc/probe/FINDINGS.md`](doc/probe/FINDINGS.md).
 
 ## Testing
 
@@ -94,8 +97,8 @@ Note: use glob pattern `*.test.mjs`, not directory path (node --test has issues 
 Before contributing, read these docs in order:
 
 1. **Design spec v3.1**: `docs/superpowers/specs/2026-04-20-qwen-plugin-cc-design.md`
-2. **16 real-world findings**: `doc/probe/FINDINGS.md`
-3. **Lessons learned**: [`lessons.md`](./lessons.md) (10 key findings + startup checklist for next agent-plugin-cc)
+2. **18 real-world findings**: `doc/probe/FINDINGS.md`
+3. **Lessons learned**: [`lessons.md`](./lessons.md) (11 key findings + startup checklist for next agent-plugin-cc)
 4. **Phase-by-phase evolution**: [`plugins/qwen/CHANGELOG.md`](./plugins/qwen/CHANGELOG.md)
 
 ## Design docs
@@ -103,7 +106,7 @@ Before contributing, read these docs in order:
 - Research:`docs/superpowers/specs/2026-04-20-qwen-plugin-cc-research.md`
 - Design(v3.1):`docs/superpowers/specs/2026-04-20-qwen-plugin-cc-design.md`
 - Plan:`docs/superpowers/plans/2026-04-20-qwen-plugin-cc-implementation.md`
-- Phase 0 探针 + 16 条实测发现:`doc/probe/FINDINGS.md`
+- Phase 0 探针 + 18 条实测发现:`doc/probe/FINDINGS.md`
 - Phase-by-phase 进度:[CHANGELOG.md](./CHANGELOG.md) + [plugins/qwen/CHANGELOG.md](./plugins/qwen/CHANGELOG.md)
 
 ## License

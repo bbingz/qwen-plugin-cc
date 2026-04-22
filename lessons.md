@@ -47,6 +47,9 @@
 10. **subagent-driven:纯 cp/markdown task 跳过正式 review**
     Phase 1 Task 1.1 严格走 spec+quality reviewer,reviewer 提的 issue 都不成立(JSON 缩进、中英混合都是原 plan 规定)。之后节奏:**代码 + 测试 task 走完整 TDD + 可选 reviewer;纯 cp + 改字样 + markdown task 只 implementer + self-check**,快且不损质量。
 
+11. **先 probe schema,再决定保留还是删除血统代码**
+    gemini 血统里残留的 timing scaffolding 不能因为“看起来以后可能会用”就继续挂着。先跑真实 probe 看 `result` event schema;如果只有 `usage.*` 而没有 `stats` / `stats.models`,就删 dead code,不要维持半成品接口误导后续 agent。
+
 ---
 
 ## 给下个 agent-plugin-cc 的启动清单

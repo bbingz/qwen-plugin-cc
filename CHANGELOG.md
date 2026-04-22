@@ -4,6 +4,14 @@ Cross-AI collaboration log. Reverse chronological. Flat format.
 
 ## 2026-04-21
 
+- **v0.2.2 alignment** (Codex) — 补齐 `/qwen:ask` 并完成 F-18 驱动的清理路径:
+  - 新增 `doc/probe/case-14-result-event.sh` + `case-14-result-event.result.json`,实测 qwen `result` event 只有 `usage.*`,无 `stats` / `stats.models`
+  - `doc/probe/FINDINGS.md` 追加 F-18,将 Phase 2 决策锁定为“删 timing dead code”
+  - 新增 `plugins/qwen/commands/ask.md`,保持薄前台命令定位,直接复用 companion `task` sub
+  - 新增 `plugins/qwen/scripts/tests/smoke.test.mjs`,并在 `state.test.mjs` 补断言,通过 TDD 删除 `state.mjs` 里无 caller 的 timing history helpers
+  - README / design spec / alignment plan / lessons 同步到 8 个命令与 v0.2.2 定位
+  - 测试:新增 smoke + state 对齐断言;全量 `node --test plugins/qwen/scripts/tests/*.test.mjs` 回归通过
+  - _status: local implementation complete;未打 tag_
 - **v0.2.1 hotfix** (Claude Opus 4.7) — 6-way review(Claude + Codex + Gemini + Qwen + Kimi + **MiniMax 首跑**)挖出 6 P0 + 14 P1 全部修复:
   - **P0-1** PID/pgid verify 用 `/qwen/i` substring 在 workspace 叫 `qwen-plugin-cc` 时恒真(Claude + Codex + Kimi 三方命中)→ 抽 `isQwenCommandLine` helper,正则 `/(^|\/)qwen(\s|$)/m` 精确 basename 匹配,3 处(job-lifecycle / qwen.mjs / stop-review-gate-hook)对齐
   - **P0-2** runSetup 两处裸 process.cwd() 违反 v0.1.2 cwd 归一约束,子目录跑 /qwen:setup --enable-review-gate 写错 workspace slug(Claude 独家)

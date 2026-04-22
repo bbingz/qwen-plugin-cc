@@ -51,7 +51,7 @@
 
 ### 1.2 交付物(v0.1)
 
-- **7 个命令**:`setup` / `review` / `adversarial-review` / `rescue` / `status` / `result` / `cancel`(对齐 codex,不含 `ask`)
+- **8 个命令**:`setup` / `ask` / `review` / `adversarial-review` / `rescue` / `status` / `result` / `cancel`(对齐 gemini ask 习惯 + 现有 qwen runtime)
 - **3 个 skill**:`qwen-cli-runtime`(内部合约)/ `qwen-prompting`(prompt 诀窍)/ `qwen-result-handling`(输出呈现)
 - **1 个 agent**:`qwen-rescue.md`(`subagent_type=qwen:qwen-rescue`)
 - **2 个 hook**:`session-lifecycle-hook.mjs` + `stop-review-gate-hook.mjs`
@@ -62,7 +62,7 @@
 
 ### 1.3 不做(v0.1 明确排除)
 
-- 不做 `/qwen:ask` 命令(v0.2 再加,对齐 gemini/minimax 形态)
+- `/qwen:ask` 作为 v0.2.2 对齐项补入:薄前台命令,直接复用 companion `task` sub,不新增 router case
 - 不做 per-command 切模型(默认不传 `-m`,用户在 `~/.qwen/settings.json` 改)
 - 不做实时事件流 UX(foreground 走 stdout 透传即可)
 - 不做 Engram sidecar(无对应路径映射)
@@ -107,7 +107,8 @@ qwen-plugin-cc/
 plugins/qwen/
 ├── .claude-plugin/plugin.json
 ├── CHANGELOG.md
-├── commands/                               # 7 条
+├── commands/                               # 8 条
+│   ├── ask.md
 │   ├── setup.md
 │   ├── review.md
 │   ├── adversarial-review.md
@@ -153,7 +154,7 @@ plugins/qwen/
 | **轻度改写**(常量/字样) | `scripts/lib/{state,render,prompts,job-control}.mjs`、`scripts/session-lifecycle-hook.mjs`、`scripts/stop-review-gate-hook.mjs`、`prompts/*` | `state.mjs` 沿用已有的 `$CLAUDE_PLUGIN_DATA` + `$TMPDIR` fallback,仅改 slug/env 名;`job-control.mjs` 17.4K 必须先做**依赖解耦清单**(§7 Phase 2) |
 | **重写**(CLI 差异) | `scripts/lib/qwen.mjs`(对应 `gemini.mjs`,参照 ~11–15K 尺寸) | 位置参数 + stream-json + `--continue/--resume`;认证探活处理 `[API Error:`;proxy 注入(§4.3);判错五层(§5.1);fg/bg 差异化解析(§4.4) |
 | **不引入** | codex 独有的 `scripts/app-server-broker.mjs`、`scripts/lib/{app-server,app-server-protocol.d.ts,broker-endpoint,broker-lifecycle,tracked-jobs,workspace,fs}.mjs` | Codex MCP app-server;gemini 把 tracked/workspace/fs 能力分散到其他文件 |
-| **从零写**(对应命令与 skill) | 7 个 `commands/*.md`、1 个 `agents/qwen-rescue.md`、3 个 `skills/*/SKILL.md`、2 个 `prompts/*.md` | 全换 qwen 字样;prompting skill 换 qwen3.6 特性 |
+| **从零写**(对应命令与 skill) | 8 个 `commands/*.md`、1 个 `agents/qwen-rescue.md`、3 个 `skills/*/SKILL.md`、2 个 `prompts/*.md` | 全换 qwen 字样;prompting skill 换 qwen3.6 特性 |
 
 ### 2.4 命名对齐
 
@@ -206,9 +207,10 @@ plugins/qwen/
 
 **Foreground 策略(F-4 定稿)**:默认 `auto-edit`。qwen 对非 edit 工具(`run_shell_command`)无 TTY 时 **auto-deny**(Phase 0 case-11 实测),不 hang,不 prompt,返回 `permission_denials[]`。用户想真跑 shell 显式加 `--unsafe`。
 
-### 3.4 命令 `commands/*.md`(7 个)
+### 3.4 命令 `commands/*.md`(8 个)
 
 Frontmatter 对齐 codex,关键差异:
+- `ask.md`:one-shot 前台问答,永远 fresh,不做 background/resume/unsafe 语义
 - `setup.md`:安装候选动态;未认证提示 `! qwen auth coding-plan`;报告里列 `qwen hooks list`(§4.5)
 - `review.md` / `adversarial-review.md`:`--wait|--background`、`--base <ref>`、`--scope`;`AskUserQuestion` 一次选执行模式
 - `rescue.md`:走 Agent 工具;`task-resume-candidate` 决策续/新;**示例区预埋两条自救引导**:

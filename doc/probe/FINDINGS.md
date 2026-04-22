@@ -212,6 +212,14 @@ Task 2.3 实装时发现:
 - 无法用 httpstat.us mock 状态码(case 12 失败)
 - **影响**:多状态码测试走单元测试 mock 字符串路径即可(plan Task 2.5);不强求 probe 活样本
 
+### F-18. `result` event schema(2026-04-21 gemini alignment probe)
+
+- case-14 产出:`doc/probe/case-14-result-event.result.json`
+- 实测 result event 包含字段:`duration_api_ms,duration_ms,num_turns,result,session_id,subtype,type,usage.cache_read_input_tokens,usage.input_tokens,usage.output_tokens,usage.total_tokens,uuid`
+- stats.models 嵌套:no,result event 无 `stats` 字段,只有平铺 `usage.*`
+- **决策**:v0.3 Phase 2 走 删 timing dead code 路径
+- **影响**:`plugins/qwen/scripts/lib/state.mjs:262-401` 命运锁定
+
 ---
 
 ## 对 plan 的修订(在 Phase 1 开工前必做)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 (alignment, unreleased)
+
+- 新增 `/qwen:ask` 命令:薄前台 one-shot ask,直接路由到 companion `task`,不新增 router case
+- 新增 Phase 0 `case-14` probe,确认 qwen `result` event 只有 `usage.*`,没有 `stats` / `stats.models`
+- 删除 `scripts/lib/state.mjs` 中 gemini 血统遗留的 timing history helpers(`appendTimingHistory` / `readTimingHistory` / `resolveTimingHistoryFile`)
+- 新增 `scripts/tests/smoke.test.mjs`;`state.test.mjs` 增加 timing dead-code removal 断言
+- 文档同步到 8 个命令与 F-18 决策:README / design spec / lessons / v0.3 alignment plan
+
 ## 0.1.0 (unreleased)
 
 - **Phase 4 完成**(9 tasks + 3 集成测试;累计 84 tests 全绿)

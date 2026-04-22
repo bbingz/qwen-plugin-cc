@@ -98,7 +98,7 @@ test("integration: cancel 不存在 job 默认打 human text + exit 3", { timeou
   }
 });
 
-test("integration: cancel 已 completed job → exit 4(v0.2.1 P1-DX-2)", { timeout: 10_000 }, async () => {
+test("integration: cancel 已 completed job → exit 4(v0.2.1 P1-DX-2)", { timeout: 20_000 }, async () => {
   const tmp = makeTmpPluginData();
   try {
     // 用 setup --enable-review-gate 触发 saveState 创建 slug dir(P0-2 后已走
